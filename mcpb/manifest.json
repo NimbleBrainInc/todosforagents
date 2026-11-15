@@ -138,7 +138,7 @@
       "mtf_version": "0.1",
       "permissions": {
         "filesystem": "write",
-        "network": "none",
+        "network": "outbound",
         "environment": "read",
         "subprocess": "none",
         "native": "none"
