@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>To-dos</title>
+    <!--
+      The board's height floor. A host that gives the board a pane (a sidebar view, a fullscreen
+      frame) fills it, because html, body and #root are 100% of the frame. A host that renders
+      the board inline in a conversation sizes the frame to the height the document reports,
+      measured on <html>, and a document that is only 100% of its frame reports the frame's own
+      starting height back. A floor on <html> gives that host a board tall enough to show its
+      lanes (the header plus a few cards per lane); a taller pane still fills.
+    -->
+    <style>html { min-height: 560px; }</style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

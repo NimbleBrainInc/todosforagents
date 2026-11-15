@@ -1,0 +1,10 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "local>NimbleBrainInc/renovate-config"
+  ],
+  "description": "GitHub Actions only. The Python and UI dependencies are bumped by hand: the golden tests gate every bump, and the exact pins in pyproject.toml are deliberate.",
+  "enabledManagers": [
+    "github-actions"
+  ]
+}

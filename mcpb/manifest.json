@@ -1,0 +1,148 @@
+{
+  "manifest_version": "0.4",
+  "name": "@nimblebraininc/todosforagents",
+  "display_name": "Todos for Agents",
+  "version": "0.1.0",
+  "description": "To-do boards for AI agents, kept in one SQLite file on your own machine. No account, no cloud service.",
+  "author": {
+    "name": "NimbleBrain Inc",
+    "email": "hello@nimblebrain.ai"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NimbleBrainInc/todosforagents"
+  },
+  "homepage": "https://github.com/NimbleBrainInc/todosforagents",
+  "license": "MIT",
+  "keywords": [
+    "todos",
+    "to-do",
+    "kanban",
+    "planning",
+    "local",
+    "sqlite"
+  ],
+  "icon": "icon.png",
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ],
+    "runtimes": {
+      "python": ">=3.13,<3.15"
+    }
+  },
+  "user_config": {
+    "database_path": {
+      "type": "string",
+      "title": "Database file",
+      "description": "Where your boards are stored. Leave empty for the default: todos.db in your user data directory. Keep it on a local disk, not a network share.",
+      "required": false,
+      "default": ""
+    }
+  },
+  "server": {
+    "type": "uv",
+    "entry_point": "mcp_todos",
+    "mcp_config": {
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${__dirname}",
+        "--frozen",
+        "--no-dev",
+        "python",
+        "-m",
+        "mcp_todos"
+      ],
+      "env": {
+        "TODOS_RUNTIME": "local",
+        "TODOS_LOCAL_DB": "${user_config.database_path}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "create_todo",
+      "description": "Create a to-do. Defaults to the workspace's default board (auto-creating it); status defaults to open."
+    },
+    {
+      "name": "plan_todos",
+      "description": "Lay down a multi-step plan in one additive call - the decomposition primitive. Safe on a board a human also edits; idempotent on retry. Rows carry a details preview."
+    },
+    {
+      "name": "update_todo",
+      "description": "Explicit partial, null-safe update of a to-do's fields. Does not touch status (transition verbs own that)."
+    },
+    {
+      "name": "start_todo",
+      "description": "Move a to-do to in_progress and clear its blocked_reason."
+    },
+    {
+      "name": "complete_todo",
+      "description": "Move a to-do to done and set completed_at."
+    },
+    {
+      "name": "block_todo",
+      "description": "Move a to-do to blocked and record the blocked_reason."
+    },
+    {
+      "name": "reopen_todo",
+      "description": "Move a to-do back to open, clearing completed_at and blocked_reason."
+    },
+    {
+      "name": "cancel_todo",
+      "description": "Move a to-do to cancelled (won't do) and set completed_at."
+    },
+    {
+      "name": "reorder_todos",
+      "description": "Batch position update within a status lane (the board UI sends the full order on drop)."
+    },
+    {
+      "name": "archive_todo",
+      "description": "Archive a to-do - set archived_at to hide it from default views (status unchanged)."
+    },
+    {
+      "name": "list_todos",
+      "description": "List to-dos with optional filters (board, status, assignee, label, parent), a text query over title and details, and cursor pagination. Rows carry a details preview; get_todo reads the full details."
+    },
+    {
+      "name": "get_todo",
+      "description": "Get a to-do with its full details, its steps (each with a details preview), counts, and recent activity timeline."
+    },
+    {
+      "name": "get_next_todo",
+      "description": "The agent's 'what do I do next' - the highest-priority actionable to-do (open, not blocked)."
+    },
+    {
+      "name": "get_board_summary",
+      "description": "Read-only board health: per-lane counts, totals, and what needs attention (overdue, stalled, blocked)."
+    },
+    {
+      "name": "list_boards",
+      "description": "List the workspace's boards."
+    },
+    {
+      "name": "create_board",
+      "description": "Create a board; columns defaults to the four canonical lanes (Open / Doing / Blocked / Done)."
+    },
+    {
+      "name": "update_board",
+      "description": "Partial board update. Editing columns re-maps the human view without touching any to-do's canonical status."
+    }
+  ],
+  "_meta": {
+    "org.mpaktrust": {
+      "mtf_version": "0.1",
+      "permissions": {
+        "filesystem": "write",
+        "network": "none",
+        "environment": "read",
+        "subprocess": "none",
+        "native": "none"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+# Node
+node_modules/
+# Build output: the wheel and sdist, and the built UI they carry
+dist/
+# The MCP bundle's lock and pack, which a release makes
+mcpb/uv.lock
+*.mcpb
+.env

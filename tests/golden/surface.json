@@ -1,0 +1,1202 @@
+{
+  "capabilities": {
+    "extensions": {
+      "io.modelcontextprotocol/skills": {},
+      "io.modelcontextprotocol/ui": {}
+    },
+    "logging": {},
+    "prompts": {
+      "listChanged": false
+    },
+    "resources": {
+      "listChanged": false,
+      "subscribe": false
+    },
+    "tools": {
+      "listChanged": false
+    }
+  },
+  "instructions": "A to-do's status moves only through the transition verbs; update_todo cannot change it. start_todo when work begins, complete_todo when it is finished, cancel_todo when it will not be done, block_todo with a reason when it is waiting on something, reopen_todo to put it back to open. archive_todo only hides a to-do and leaves its status as it is. A to-do's key (MAG-3) and a board's key (MAG) work anywhere an id does. Hosts that load skills can read skill://todos/SKILL.md for more.",
+  "resource_templates": [
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        },
+        "ui": {
+          "csp": {},
+          "prefersBorder": true
+        }
+      },
+      "description": "The To-dos app UI under a build key. Every key serves the current build.",
+      "mimeType": "text/html;profile=mcp-app",
+      "name": "todos_ui_build",
+      "uriTemplate": "ui://todos/main/{build}"
+    }
+  ],
+  "resources": [
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "description": "Manage work on a board. Create and decompose to-dos, move them through the fixed status lifecycle, and read board state.",
+      "mimeType": "text/markdown",
+      "name": "todos",
+      "uri": "skill://todos/SKILL.md"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        },
+        "ui": {
+          "csp": {},
+          "prefersBorder": true
+        }
+      },
+      "description": "The To-dos board UI: static HTML, holding no data, that an MCP Apps host renders in a frame.\n\nServing it reads a file and opens no database session, so the board loads (and can show\nan error) even when the database cannot be reached. Every datum it shows is fetched at\nruntime through the host's tool calls, which carry the caller's identity.",
+      "mimeType": "text/html;profile=mcp-app",
+      "name": "todos_ui",
+      "uri": "ui://todos/main"
+    }
+  ],
+  "skill_sha256": "05e197309c14407966c3c7b933aba070b4c6f9fb9b0628e18582a739d1b75c1d",
+  "tools": [
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Hide a to-do from default views, leaving its status as it is.\n\nArchiving is not finishing: a finished to-do is complete_todo, one that will not be\ndone is cancel_todo. Nothing un-archives a to-do; list_todos(include_archived=True)\nstill finds it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {
+            "description": "The to-do to archive (required, in-scope): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "archive_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Archive Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Mark a to-do blocked: it is waiting on something outside it (a person, a review).\n\nRecords ``reason`` as ``blocked_reason``; get_next_todo skips blocked to-dos. When the\nblocker clears, start_todo resumes it, or reopen_todo puts it back to open.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "description": "Why it is blocked (required) \u2014 stored as ``blocked_reason``.",
+            "type": "string"
+          },
+          "todo_id": {
+            "description": "The to-do to block (required, in-scope): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "name": "block_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Block Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Mark a to-do cancelled: it will not be done. Sets ``completed_at``; takes no reason.\n\nIf the work was finished, use complete_todo instead; to hide a to-do without changing\nits status, archive_todo. reopen_todo undoes it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {
+            "description": "The to-do to cancel (required, in-scope): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "cancel_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Cancel Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Mark a to-do done: the work is finished. Sets ``completed_at``.\n\nIf it will not be done, use cancel_todo instead; to only hide it, archive_todo.\nreopen_todo undoes it.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {
+            "description": "The to-do to complete (required, in-scope): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "complete_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Complete Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Create a board. ``columns`` defaults to the four canonical lanes.\n\nThe board's key prefixes its to-dos' keys (MAG-1, MAG-2, ...) and cannot change later.\nTell the person the key the result carries.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Ordered presentation overlay [{key, label, status, color?, wip_limit?}];\ndefaults to Open / Doing / Blocked / Done."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional description."
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The board's key: 2-5 letters A-Z or digits, starting with a letter, unused in\nthe workspace. Omit to derive one from the name (\"Launch plan\" \u2192 LP)."
+          },
+          "name": {
+            "description": "Board name (required).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "name": "create_board",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Create Board"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Add one to-do. For several, or one goal broken into steps, use plan_todos instead.\n\nOmit ``board_id`` and it lands on the workspace's default board, created on first use.\nIt starts ``open`` unless ``status`` says otherwise; after that its status moves only\nthrough start_todo, complete_todo, block_todo, reopen_todo and cancel_todo.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Who it is for: agent, a person's handle, or any name."
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Why it is blocked. Required when status is blocked, and taken only\nthen."
+          },
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Target board, its id or its key (e.g. MAG); defaults to the auto-created\nworkspace default board."
+          },
+          "details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional markdown detail."
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional due time (ISO-8601)."
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional retry-dedupe token. A retried create with the SAME\nkey on the SAME board converges to one row instead of duplicating."
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Open tags."
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional parent to-do (id or key, e.g. MAG-3) for step decomposition."
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "urgent, high, normal (the default) or low. Any other value is kept and\nranks after low."
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Provenance (agent / user / import)."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "open",
+                  "in_progress",
+                  "blocked",
+                  "done",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The starting status; default open. done and cancelled set completed_at;\nblocked needs blocked_reason. A board's lanes are views over status, so there\nis no column argument."
+          },
+          "title": {
+            "description": "To-do title (required).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "name": "create_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Create Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        },
+        "ui": {
+          "resourceUri": "ui://todos/main/<build>",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        }
+      },
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "A board's health: per-lane counts, totals, and what needs attention.\n\nA lane with a WIP limit says whether it is within it; attention lists the overdue,\nstalled and blocked to-dos. Start here to report on a board, then name the to-dos behind the counts.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The board to summarize, its id or its key (e.g. MAG); omit for the\nworkspace default board."
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_board_summary",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Get Board Summary"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "The to-do to work on next: the highest-priority open, unarchived to-do.\n\nBlocked, in-progress and finished to-dos are skipped. Use it for \"what should I do\nnext\" rather than listing to-dos and choosing.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Restrict to one board, by its id or its key (e.g. MAG); omit to consider\nevery actionable to-do across all boards in the workspace."
+          }
+        },
+        "type": "object"
+      },
+      "name": "get_next_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Get Next Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        },
+        "ui": {
+          "resourceUri": "ui://todos/main/<build>",
+          "visibility": [
+            "model",
+            "app"
+          ]
+        }
+      },
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "Get a to-do with its steps, counts, and recent activity timeline.\n\nThe to-do comes whole, ``details`` included. Each step is a row with a\n``details_preview`` in place of ``details``; read a step whole with its own get_todo.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {
+            "description": "The to-do's id or its key (e.g. MAG-3), required.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "get_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Get Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "List the workspace's boards, each with its id, key and lanes.\n\nUse it to find a board's id or key. For one board's counts and what needs attention\nuse get_board_summary; for the to-dos on it, list_todos.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "name": "list_boards",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "List Boards"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": true
+      },
+      "description": "List or search to-dos, with optional filters and cursor pagination.\n\nWithout ``query`` the newest come first. With ``query``, only to-dos whose title or\ndetails contain every word of it are listed, best match first: exact title, then\ntitle starting with the query, then every word starting a title word, then the rest,\nnewest first within each. Rows carry a short ``details_preview``, not ``details``:\npick from the previews, then read the to-do you act on whole with ``get_todo``.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filter by assignee."
+          },
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filter to one board, by its id or its key (e.g. MAG)."
+          },
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Opaque pagination cursor from a previous page of the same call; pass the\nsame filters and query with it."
+          },
+          "include_archived": {
+            "default": false,
+            "description": "Include archived to-dos (default False hides them).",
+            "type": "boolean"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filter to to-dos carrying this label."
+          },
+          "limit": {
+            "default": 50,
+            "description": "Page size (default 50, clamped to 200).",
+            "type": "integer"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Filter to a goal's steps (the goal's id or key)."
+          },
+          "query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Search text over title and details, split on whitespace; every word must\nmatch, case-insensitively, as a substring. Combines with the other filters."
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "open",
+                  "in_progress",
+                  "blocked",
+                  "done",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Only to-dos in this status."
+          }
+        },
+        "type": "object"
+      },
+      "name": "list_todos",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "List Todos"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Add several to-dos in one call: a plan, or one goal broken into steps.\n\nFor a single to-do use create_todo. It only adds: the to-dos already on the board are\nnever replaced or removed, so it is safe on a board a person also edits. Pass\n``parent_id`` to group the steps under a goal, and ``idempotency_key`` so a retried call\nreturns the same to-dos instead of adding them twice.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Target board, its id or its key (e.g. MAG); defaults to the workspace\ndefault board (auto-created)."
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional call-level key; per-item keys derive from it + index\nso a re-run of the plan converges."
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional shared parent to-do (id or key) grouping every step under one goal."
+          },
+          "todos": {
+            "description": "The steps, in order, each {title, details?, priority?, labels?, due_at?,\nstatus?, blocked_reason?}.",
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "blocked_reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Why the step is blocked. Required when status is blocked, and taken only then."
+                },
+                "details": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Optional markdown detail."
+                },
+                "due_at": {
+                  "anyOf": [
+                    {
+                      "format": "date-time",
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Optional due time (ISO-8601)."
+                },
+                "labels": {
+                  "anyOf": [
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "Open tags."
+                },
+                "priority": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "urgent, high, normal (the default) or low. Any other value is kept and ranks after low."
+                },
+                "status": {
+                  "anyOf": [
+                    {
+                      "enum": [
+                        "open",
+                        "in_progress",
+                        "blocked",
+                        "done",
+                        "cancelled"
+                      ],
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null,
+                  "description": "The step's starting status; default open. done and cancelled set completed_at; blocked needs blocked_reason."
+                },
+                "title": {
+                  "description": "The step's title.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "todos"
+        ],
+        "type": "object"
+      },
+      "name": "plan_todos",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Plan Todos"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Put a to-do back to open: it was done, cancelled or blocked, and is to do again.\n\nClears ``completed_at`` and ``blocked_reason``. Use it rather than create_todo when\nfinished work comes back; to resume work right away, use start_todo.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {
+            "description": "The to-do to reopen (required, in-scope): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "reopen_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Reopen Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Set the order of the to-dos in one status lane of a board, to reprioritize them.\n\nIt changes positions only. To move a to-do to another status, use start_todo,\ncomplete_todo, block_todo, reopen_todo or cancel_todo.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "The board whose lane is reordered (required, in-scope): its id or its key.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The lane to reorder, by its status.",
+            "enum": [
+              "open",
+              "in_progress",
+              "blocked",
+              "done",
+              "cancelled"
+            ],
+            "type": "string"
+          },
+          "todo_ids": {
+            "description": "Every to-do in the lane (ids or keys), in the new order.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "board_id",
+          "status",
+          "todo_ids"
+        ],
+        "type": "object"
+      },
+      "name": "reorder_todos",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Reorder Todos"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Mark a to-do in progress: work on it has begun.\n\nClears any ``blocked_reason``, so it also resumes a blocked to-do once the blocker is\ngone. When the work is finished use complete_todo; when it is stuck, block_todo.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "todo_id": {
+            "description": "The to-do to start (required, in-scope): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "start_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Start Todo"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Change a board's name, description or lanes. Its key never changes.\n\nOnly the fields you pass change. Null or an empty name or description leaves it as\nit is, so neither can be cleared here. Editing ``columns`` changes which status each\nlane shows; no to-do's status changes.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "board_id": {
+            "description": "The board to update (required, in-scope): its id or its key (e.g. MAG).",
+            "type": "string"
+          },
+          "columns": {
+            "anyOf": [
+              {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The whole new lane list, replacing the old: [{key, label, status, color?,\nwip_limit?}], each lane showing the to-dos in one status. Omit to keep the\nlanes; an empty list leaves the board with none."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The new description. Omit to keep it."
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The new name. Omit to keep it."
+          }
+        },
+        "required": [
+          "board_id"
+        ],
+        "type": "object"
+      },
+      "name": "update_board",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Update Board"
+    },
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "annotations": {
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "readOnlyHint": false
+      },
+      "description": "Change a to-do's title, details, priority, labels, assignee, due date or goal.\n\nNot its status: to move a to-do, use start_todo, complete_todo, block_todo,\nreopen_todo or cancel_todo. Only the fields you pass change. Null or an empty value\nleaves a field as it is, so no field can be cleared here.",
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "assignee": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Who it is for: agent, a person's handle, or any name. Omit to keep it."
+          },
+          "details": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "New markdown details, replacing the old. Omit to keep them."
+          },
+          "due_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The new due time (ISO-8601). Omit to keep it."
+          },
+          "labels": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The whole new label list, replacing the old. Omit (or pass an empty list)\nto keep the labels."
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The goal this to-do becomes a step of, by id or key; not the to-do\nitself. Omit to keep it."
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "urgent, high, normal or low; any other value is kept and ranks after low.\nOmit to keep it."
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "The new title. Omit to keep it."
+          },
+          "todo_id": {
+            "description": "The to-do to update (required): its id or its key (e.g. MAG-3).",
+            "type": "string"
+          }
+        },
+        "required": [
+          "todo_id"
+        ],
+        "type": "object"
+      },
+      "name": "update_todo",
+      "outputSchema": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Update Todo"
+    }
+  ]
+}

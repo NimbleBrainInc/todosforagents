@@ -1,0 +1,57 @@
+== todos ==
+WyJ0b2RvcyIsIjIwMjYtMDMtMDRUMDU6MDY6MDcuODkxMDExKzAwOjAwIiwidGRfMDFKTlE4WDVaM0s3TTJQNFI2VDhWMFcyWTQiXQ
+WHERE
+(todo.created_at, todo.id) < ($1::TIMESTAMP WITH TIME ZONE, $2::VARCHAR)
+  param_1 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+  param_2 = 'td_01JNQ8X5Z3K7M2P4R6T8V0W2Y4'
+ORDER BY
+todo.created_at DESC
+ORDER BY
+todo.id DESC
+
+== todos_search ==
+WyJ0b2Rvc19zZWFyY2giLDIsIjIwMjYtMDMtMDRUMDU6MDY6MDcuODkxMDExKzAwOjAwIiwidGRfMDFKTlE4WDVaM0s3TTJQNFI2VDhWMFcyWTQiXQ
+WHERE
+(CASE WHEN (lower(todo.title) = lower($1::VARCHAR)) THEN $2::INTEGER WHEN (lower(todo.title) LIKE lower($3::VARCHAR) ESCAPE '\\') THEN $4::INTEGER WHEN ((lower(todo.title) LIKE lower($5::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($6::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($7::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($8::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($9::VARCHAR) ESCAPE '\\') AND (lower(todo.title) LIKE lower($10::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($11::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($12::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($13::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($14::VARCHAR) ESCAPE '\\')) THEN $15::INTEGER ELSE $16::INTEGER END, todo.created_at, todo.id) < ($17::INTEGER, $18::TIMESTAMP WITH TIME ZONE, $19::VARCHAR)
+  param_1 = 'ship it'
+  param_10 = 'it%'
+  param_11 = '% it%'
+  param_12 = '%\tit%'
+  param_13 = '%\nit%'
+  param_14 = '%\rit%'
+  param_15 = 2
+  param_16 = 1
+  param_17 = 2
+  param_18 = datetime.datetime(2026, 3, 4, 5, 6, 7, 891011, tzinfo=datetime.timezone.utc)
+  param_19 = 'td_01JNQ8X5Z3K7M2P4R6T8V0W2Y4'
+  param_2 = 4
+  param_3 = 'ship it%'
+  param_4 = 3
+  param_5 = 'ship%'
+  param_6 = '% ship%'
+  param_7 = '%\tship%'
+  param_8 = '%\nship%'
+  param_9 = '%\rship%'
+ORDER BY
+CASE WHEN (lower(todo.title) = lower($1::VARCHAR)) THEN $2::INTEGER WHEN (lower(todo.title) LIKE lower($3::VARCHAR) ESCAPE '\\') THEN $4::INTEGER WHEN ((lower(todo.title) LIKE lower($5::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($6::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($7::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($8::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($9::VARCHAR) ESCAPE '\\') AND (lower(todo.title) LIKE lower($10::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($11::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($12::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($13::VARCHAR) ESCAPE '\\' OR lower(todo.title) LIKE lower($14::VARCHAR) ESCAPE '\\')) THEN $15::INTEGER ELSE $16::INTEGER END DESC
+  param_1 = 'ship it'
+  param_10 = 'it%'
+  param_11 = '% it%'
+  param_12 = '%\tit%'
+  param_13 = '%\nit%'
+  param_14 = '%\rit%'
+  param_15 = 2
+  param_16 = 1
+  param_2 = 4
+  param_3 = 'ship it%'
+  param_4 = 3
+  param_5 = 'ship%'
+  param_6 = '% ship%'
+  param_7 = '%\tship%'
+  param_8 = '%\nship%'
+  param_9 = '%\rship%'
+ORDER BY
+todo.created_at DESC
+ORDER BY
+todo.id DESC
+

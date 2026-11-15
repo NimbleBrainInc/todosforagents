@@ -1,0 +1,191 @@
+name: Release
+
+# A version tag (v0.1.0) releases that version twice over:
+#
+# 1. PyPI. The UI is built, the sdist and the wheel (built from the sdist) are made once, the
+#    tagged tree passes `make verify`, and the exact wheel built is started the way a user starts
+#    it (uvx, stdio). Then the files are published with trusted publishing (OIDC): no API token
+#    exists anywhere. PyPI trusts this repository, this file (release.yml) and the `pypi`
+#    environment by name, and the environment waits for a maintainer's approval.
+# 2. mpak, as the MCP bundle @nimblebraininc/todosforagents, only after PyPI has the version.
+#    The bundle is uv type: it carries no code, only mcpb/pyproject.toml pinning this version,
+#    a uv.lock made here against PyPI, the manifest and the icon. The host runs it with
+#    `uv run --frozen`, so a user gets exactly the locked set.
+#
+# Only admins can push a version tag, the tagged commit must already be on main, the tag must
+# equal the package version (and the bundle's, which tests/test_mcpb.py holds equal), and a
+# version can never be uploaded to PyPI twice.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The tagged commit is on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "tag ${GITHUB_REF_NAME} points at $GITHUB_SHA, which is not on main"; exit 1; }
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: The tag names the version in pyproject.toml and the bundle
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(uv version --short)
+          test "$TAG" = "v$version" || { echo "tag $TAG does not match version $version"; exit 1; }
+          bundle=$(jq -r .version mcpb/manifest.json)
+          test "$bundle" = "$version" || { echo "mcpb/manifest.json is $bundle, not $version"; exit 1; }
+      - run: uv sync --locked
+      # Builds the UI, then the sdist and the wheel from it, and checks the wheel's contents.
+      - run: make dist
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # The tagged tree passes the whole gate, as on every pull request.
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - run: uv sync --locked
+      - run: make verify
+
+  # The exact wheel that will be published, started by uvx on each supported Python.
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Start the built wheel with uvx
+        env:
+          PYTHON: ${{ matrix.python }}
+        run: uv run python scripts/smoke.py uvx --python "$PYTHON" --from "$(ls dist/*.whl)" todosforagents
+
+  pypi:
+    needs: [build, verify, smoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/p/todosforagents
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  # The MCP bundle, registered with mpak through mcpb-pack, which validates the manifest, packs
+  # the directory with the mcpb CLI (a uv bundle vendors nothing), and announces it with this
+  # job's OIDC token. mcpb-pack uploads to a GitHub release only on a release event, and the
+  # registry reads the bundle from the release, so this job makes the release and uploads it.
+  mcpb:
+    needs: pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write # create the GitHub release and upload the bundle to it
+      id-token: write # the OIDC token mpak verifies
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.13"
+      - name: Wait for PyPI to serve this version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          for _ in $(seq 1 30); do
+            if curl -fsS "https://pypi.org/simple/todosforagents/" \
+              | grep -q "todosforagents-${TAG#v}-py3-none-any.whl"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "PyPI does not serve todosforagents ${TAG#v} after 5 minutes"; exit 1
+      - name: Lock the bundle against PyPI
+        run: uv lock --directory mcpb --refresh
+      - run: uv sync --locked
+      - name: Start the bundle's own command from its lock
+        run: |
+          uv run python scripts/smoke.py --runtime-env \
+            uv run --directory mcpb --frozen --no-dev python -m mcp_todos
+          rm -rf mcpb/.venv
+      - name: Pack the bundle
+        id: pack
+        uses: NimbleBrainInc/mcpb-pack@e74c82722fa4b954ce7740f875d6c437ae471df6 # v3.0.0
+        with:
+          directory: mcpb
+          output: "todosforagents-{version}.mcpb"
+          upload: false
+          announce: false
+      - name: Create the GitHub release with the bundle and its lock
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          BUNDLE: mcpb/${{ steps.pack.outputs.bundle-path }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
+            --notes "todosforagents ${TAG#v}: https://pypi.org/project/todosforagents/${TAG#v}/" \
+            "$BUNDLE" mcpb/uv.lock
+      - name: Register the bundle with mpak
+        uses: NimbleBrainInc/mcpb-pack@e74c82722fa4b954ce7740f875d6c437ae471df6 # v3.0.0
+        with:
+          directory: mcpb
+          bundle-path: ${{ steps.pack.outputs.bundle-path }}
+          build: false
+          upload: false
+          announce: true
+          announce-required: true
+          platform-os: any
+          platform-arch: any
