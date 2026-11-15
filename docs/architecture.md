@@ -44,7 +44,8 @@ after the change, and refuses with `invalid_request` when the tenant is over: a 
 archived, so completing, cancelling or archiving frees room, and any move that makes a finished
 to-do open again (`reopen_todo`, `start_todo`, `block_todo`) counts. An idempotent replay adds
 nothing and is never refused. The count runs under the caller's session, so row-level security
-still applies, and after a transaction-scoped lock on the tenant (an advisory lock on Postgres;
+still applies: where it scopes a session to one workspace, a limit holds per workspace. It runs
+after a transaction-scoped lock on the tenant (an advisory lock on Postgres;
 SQLite's `BEGIN IMMEDIATE` already serializes writers), so concurrent writes cannot both take
 the last slot.
 

@@ -41,7 +41,7 @@ The load-bearing contracts:
     again), counts inside its own transaction after the change and raises
     :class:`LimitExceededError` when the count is over, so the transaction rolls back.
     The count is of the caller's tenant, under the caller's session (so row-level security
-    applies), and runs after :func:`~mcp_todos.db.dialect.serialize_on` for the tenant, so
+    applies, and a session scoped to one workspace counts that workspace), and runs after :func:`~mcp_todos.db.dialect.serialize_on` for the tenant, so
     two concurrent writes cannot both pass on the same last slot.
   * **Default board (zero-ceremony start).** A workspace gets a default
     board auto-created on first ``create_todo``/``plan_todos`` with no ``board_id``.
@@ -1102,11 +1102,17 @@ async def _transition(
 
     ``extra`` carries the verb's owned side-effect columns (e.g. ``completed_at`` /
     ``blocked_reason``); ``updated_at`` is always bumped. A move that makes a finished,
-    unarchived to-do open again counts toward ``limits``. Returns
-    ``(Todo, previous_status)`` so the tool can report what it moved FROM.
+    unarchived to-do open again counts toward ``limits``. The status that decides it is read
+    under a row lock held to commit, so a concurrent move of the same to-do cannot make it
+    stale. Returns ``(Todo, previous_status)`` so the tool can report what it moved FROM.
     """
-    row = await _resolve_todo(conn, ctx, todo_id)  # 404 if out of scope
-    todo_id = row["id"]
+    todo_id = (await _resolve_todo(conn, ctx, todo_id))["id"]  # 404 if out of scope
+    row = await _one(
+        conn,
+        select(todo.c.status, todo.c.archived_at).where(todo.c.id == todo_id).with_for_update(),
+    )
+    if row is None:
+        raise TodoNotFoundError(todo_id)
     previous_status = row["status"]
     values = {"status": new_status, **extra, "updated_at": _now()}
     await conn.execute(todo.update().where(todo.c.id == todo_id).values(**values))

@@ -82,7 +82,9 @@ class Limits:
     """How much a scope's tenant may hold. ``None`` in a field means no limit on that count.
 
     The store enforces them inside the transaction that would exceed one, counting the
-    tenant's rows the caller's session can see: every board, and every **open** to-do, one
+    tenant's rows the caller's session can see. Where row-level security scopes a session to
+    one workspace, that is the caller's workspace, so a limit holds per workspace. It counts
+    every board, and every **open** to-do, one
     whose status is neither ``done`` nor ``cancelled`` and that is not archived. Completing,
     cancelling or archiving a to-do frees room; any move that makes a finished to-do open
     again counts.

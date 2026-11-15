@@ -275,6 +275,29 @@ async def test_postgres_serializes_limit_checks_on_an_advisory_lock() -> None:
     assert len(executed) == 1
 
 
+async def test_a_move_reads_the_status_it_counts_on_under_a_row_lock(app_engine) -> None:
+    # Under READ COMMITTED, an unlocked read could see a to-do still open after a concurrent
+    # complete freed its slot for another create; the move would then skip the count. The read
+    # that decides whether to count is SELECT ... FOR UPDATE, taken before the UPDATE.
+    finished = await _create("finished")
+    await _move("complete", finished.id)
+    executed: list[Any] = []
+    async with session_for(CTX) as conn:
+        real_execute = conn.execute
+
+        async def execute(stmt: Any, *args: Any, **kw: Any) -> Any:
+            executed.append(stmt)
+            return await real_execute(stmt, *args, **kw)
+
+        proxy = SimpleNamespace(dialect=conn.dialect, execute=execute)
+        await store.reopen_todo(proxy, CTX, todo_id=finished.id, limits=TODOS_2)  # ty: ignore[invalid-argument-type]
+    sql = [str(stmt.compile(dialect=postgresql.dialect())) for stmt in executed]
+    locked = next(i for i, s in enumerate(sql) if s.rstrip().endswith("FOR UPDATE"))
+    updated = next(i for i, s in enumerate(sql) if s.startswith("UPDATE todo"))
+    assert locked < updated
+    assert "todo.status" in sql[locked]
+
+
 # --------------------------------------------------------------------------- #
 # The tool boundary                                                            #
 # --------------------------------------------------------------------------- #
