@@ -6,10 +6,12 @@ import { AppProvider } from "@nimblebrain/synapse/react";
 // this on render; the entry import just applies it earlier. (synapse ≥ 0.11)
 import "@nimblebrain/synapse/ui/base";
 import App from "./App";
+// The bundle manifest carries the release version; tests/test_mcpb.py holds it equal to the package's.
+import manifest from "../../mcpb/manifest.json";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <AppProvider name="todos" version="0.1.0" forwardKeys>
+    <AppProvider name="todos" version={manifest.version} forwardKeys>
       <App />
     </AppProvider>
   </StrictMode>,
