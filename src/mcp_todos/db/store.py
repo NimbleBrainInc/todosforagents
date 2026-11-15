@@ -36,6 +36,13 @@ The load-bearing contracts:
     Every argument that takes a to-do id resolves a key first (:func:`_resolve_todo`),
     and every one that takes a board id resolves a board key (:func:`_board_by_ref`,
     :func:`_on_board`), within the caller's workspace.
+  * **Limits.** When the runtime gives :class:`~mcp_todos.runtime.Limits`, a write that adds
+    a board, or adds an open to-do (a create, or a move that makes a finished one open
+    again), counts inside its own transaction after the change and raises
+    :class:`LimitExceededError` when the count is over, so the transaction rolls back.
+    The count is of the caller's tenant, under the caller's session (so row-level security
+    applies, and a session scoped to one workspace counts that workspace), and runs after :func:`~mcp_todos.db.dialect.serialize_on` for the tenant, so
+    two concurrent writes cannot both pass on the same last slot.
   * **Default board (zero-ceremony start).** A workspace gets a default
     board auto-created on first ``create_todo``/``plan_todos`` with no ``board_id``.
     Exactly one default per workspace, enforced by the partial unique index
@@ -71,7 +78,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from mcp_todos.db.dialect import insert_for, json_array_contains
+from mcp_todos.db.dialect import insert_for, json_array_contains, serialize_on
 from mcp_todos.db.tables import board, todo, todo_activity
 from mcp_todos.ids import new_board_id, new_todo_id
 from mcp_todos.keys import (
@@ -82,10 +89,11 @@ from mcp_todos.keys import (
     parse_todo_key,
 )
 from mcp_todos.models import STATUSES, Board, PlanItem, Todo, TodoActivity
-from mcp_todos.runtime import Principal
+from mcp_todos.runtime import Limits, Principal
 
 __all__ = [
     "BoardNotFoundError",
+    "LimitExceededError",
     "TodoNotFoundError",
     "archive_todo",
     "block_todo",
@@ -119,6 +127,22 @@ class TodoNotFoundError(LookupError):
 
 class BoardNotFoundError(LookupError):
     """A board id is not visible in this (tenant, workspace) — 404, not 403."""
+
+
+class LimitExceededError(Exception):
+    """The write would take the caller past one of its :class:`~mcp_todos.runtime.Limits`.
+
+    Raised inside the write's transaction after the change; leaving the session with it rolls
+    the transaction back, so nothing the write did is kept. ``limit`` names the
+    :class:`~mcp_todos.runtime.Limits` field (``max_boards`` or ``max_open_todos``) and
+    ``maximum`` its value.
+    """
+
+    def __init__(self, limit: str, maximum: int) -> None:
+        self.limit = limit
+        self.maximum = maximum
+        what = "boards" if limit == "max_boards" else "open to-dos"
+        super().__init__(f"This account is at its limit of {maximum} {what}. Nothing was changed.")
 
 
 # --------------------------------------------------------------------------- #
@@ -533,7 +557,67 @@ async def _upsert_returning(
 # --------------------------------------------------------------------------- #
 
 
-async def _resolve_default_board(conn: AsyncConnection, ctx: Principal) -> RowMapping:
+#: Prefix of the lock :func:`_enforce_limits` serializes on, keyed by tenant.
+_LIMITS_LOCK = "todos:limits:"
+
+
+def _counts_as_open(status: str, archived_at: datetime | None) -> bool:
+    """Whether a to-do counts toward ``max_open_todos``: not finished and not archived."""
+    return status not in _TERMINAL_STATUSES and archived_at is None
+
+
+async def _enforce_limits(
+    conn: AsyncConnection,
+    ctx: Principal,
+    limits: Limits | None,
+    *,
+    boards: bool = False,
+    open_todos: bool = False,
+) -> None:
+    """Raise :class:`LimitExceededError` when, after this transaction's change, the caller's
+    tenant holds more boards (``boards``) or open to-dos (``open_todos``) than ``limits``
+    allow.
+
+    The count is of the tenant's rows the session can see, so row-level security still
+    applies. It runs after the change, so it includes it. The lock comes first, so a concurrent
+    write that took it earlier has committed and is counted too.
+    """
+    if limits is None:
+        return
+    checks: list[tuple[str, int, Any]] = []
+    if boards and limits.max_boards is not None:
+        checks.append(
+            (
+                "max_boards",
+                limits.max_boards,
+                select(func.count()).select_from(board).where(board.c.tenant_id == ctx.tenant_id),
+            )
+        )
+    if open_todos and limits.max_open_todos is not None:
+        checks.append(
+            (
+                "max_open_todos",
+                limits.max_open_todos,
+                select(func.count())
+                .select_from(todo)
+                .where(
+                    todo.c.tenant_id == ctx.tenant_id,
+                    todo.c.status.notin_(_TERMINAL_STATUSES),
+                    todo.c.archived_at.is_(None),
+                ),
+            )
+        )
+    if not checks:
+        return
+    await serialize_on(conn, _LIMITS_LOCK + ctx.tenant_id)
+    for name, maximum, stmt in checks:
+        if int((await conn.execute(stmt)).scalar_one()) > maximum:
+            raise LimitExceededError(name, maximum)
+
+
+async def _resolve_default_board(
+    conn: AsyncConnection, ctx: Principal, limits: Limits | None = None
+) -> RowMapping:
     """Return the workspace's default board, auto-creating it on first use.
 
     Zero-ceremony start: ``create_todo`` / ``plan_todos`` with no ``board_id`` land
@@ -546,7 +630,7 @@ async def _resolve_default_board(conn: AsyncConnection, ctx: Principal) -> RowMa
     So we ``INSERT ... ON CONFLICT DO NOTHING`` the default board, then re-select
     the (now-guaranteed-present) default — the loser converges on the winner's row
     rather than raising. The board is born with the four canonical lanes
-    (:data:`_DEFAULT_COLUMNS`).
+    (:data:`_DEFAULT_COLUMNS`). Creating it counts toward ``limits.max_boards``.
     """
     existing = await _one(conn, select(board).where(board.c.is_default.is_(True)))
     if existing is not None:
@@ -570,7 +654,8 @@ async def _resolve_default_board(conn: AsyncConnection, ctx: Principal) -> RowMa
         # uq_board_key too (both carry TODO), and either one means the default exists.
         .on_conflict_do_nothing()
     )
-    await conn.execute(stmt)
+    if (await conn.execute(stmt)).rowcount:
+        await _enforce_limits(conn, ctx, limits, boards=True)
     # Whether we won or lost the race, exactly one default board now exists; re-select it.
     row = await _one(conn, select(board).where(board.c.is_default.is_(True)))
     if row is None:  # pragma: no cover - the index guarantees one exists post-insert
@@ -578,7 +663,9 @@ async def _resolve_default_board(conn: AsyncConnection, ctx: Principal) -> RowMa
     return row
 
 
-async def _resolve_board(conn: AsyncConnection, ctx: Principal, board_id: str | None) -> RowMapping:
+async def _resolve_board(
+    conn: AsyncConnection, ctx: Principal, board_id: str | None, limits: Limits | None = None
+) -> RowMapping:
     """Resolve a target board: the given ``board_id``, an id or a key (404 if out of scope),
     else the default.
 
@@ -592,7 +679,7 @@ async def _resolve_board(conn: AsyncConnection, ctx: Principal, board_id: str | 
     """
     if board_id is not None:
         return await _board_by_ref(conn, ctx, board_id)
-    return await _resolve_default_board(conn, ctx)
+    return await _resolve_default_board(conn, ctx, limits)
 
 
 async def _next_sort_order(conn: AsyncConnection, board_id: str, status: str) -> int:
@@ -663,6 +750,7 @@ async def create_todo(
     blocked_reason: str | None = None,
     idempotency_key: str | None = None,
     source: str | None = None,
+    limits: Limits | None = None,
 ) -> tuple[Todo, str]:
     """Create a to-do on a board, auto-creating the workspace default board if needed.
 
@@ -672,7 +760,9 @@ async def create_todo(
     to-do created ``done``/``cancelled`` carries ``completed_at``, and one created
     ``blocked`` needs ``blocked_reason`` (:func:`_create_side_effects`).
     A given ``parent_id`` (an id or a key) is validated to be in scope (404 otherwise).
-    The to-do takes the board's next number.
+    The to-do takes the board's next number. A new open to-do, or an auto-created default
+    board, counts toward ``limits`` (:class:`LimitExceededError`); a matched replay adds
+    nothing, so it is never refused.
 
     Idempotency: with an ``idempotency_key``, a retry on
     the SAME board converges to one row under ``uq_todo_idem`` via ON CONFLICT (see
@@ -695,7 +785,7 @@ async def create_todo(
     side_effects = _create_side_effects(resolved_status, blocked_reason, now)
     clean_labels = _clean_labels(labels)
 
-    board_row = await _resolve_board(conn, ctx, board_id)
+    board_row = await _resolve_board(conn, ctx, board_id, limits)
     target_board_id = board_row["id"]
 
     if parent_id is not None:
@@ -750,6 +840,8 @@ async def create_todo(
         row, created = inserted, True
     if created:
         await _advance_number(conn, target_board_id, number + 1)
+        if _counts_as_open(resolved_status, None):
+            await _enforce_limits(conn, ctx, limits, open_todos=True)
 
     action = "created" if created else "matched"
     # A matched create changed no row — reflect it in the audit detail so the change log
@@ -774,6 +866,7 @@ async def plan_todos(
     board_id: str | None = None,
     parent_id: str | None = None,
     idempotency_key: str | None = None,
+    limits: Limits | None = None,
 ) -> tuple[list[Todo], int]:
     """Lay down a multi-step plan in one additive call — the decomposition primitive.
 
@@ -792,6 +885,9 @@ async def plan_todos(
     ``sort_order`` is read ONCE (not per item), and a plain insert uses ``RETURNING`` (no
     post-insert re-select), so a large plan stays bounded — no per-item N+1.
 
+    The plan counts toward ``limits`` as a whole: when its new open steps would take the
+    caller past ``max_open_todos``, none of them is kept (:class:`LimitExceededError`).
+
     Returns ``(todos, created_count)`` — the created/matched To-do wire models and the
     number that landed as NEW (vs. matched on retry).
     """
@@ -808,7 +904,7 @@ async def plan_todos(
         # row for a plan that creates nothing.
         return [], 0
 
-    board_row = await _resolve_board(conn, ctx, board_id)
+    board_row = await _resolve_board(conn, ctx, board_id, limits)
     target_board_id = board_row["id"]
 
     if parent_id is not None:
@@ -822,6 +918,7 @@ async def plan_todos(
     first_number = next_number = await _claim_number(conn, target_board_id)
 
     created_count = 0
+    opened = False
     out: list[Todo] = []
     now = _now()
 
@@ -893,10 +990,13 @@ async def plan_todos(
         if created:
             created_count += 1
             next_number += 1
+            opened = opened or _counts_as_open(resolved_status, None)
         out.append(Todo.from_row(row, board_row["key"]))
 
     if next_number != first_number:
         await _advance_number(conn, target_board_id, next_number)
+    if opened:
+        await _enforce_limits(conn, ctx, limits, open_todos=True)
 
     # One audit row for the plan call, carrying counts only (no PII): the number of
     # items in the plan and how many were newly created.
@@ -996,24 +1096,38 @@ async def _transition(
     new_status: str,
     extra: dict[str, Any],
     detail: dict[str, Any] | None = None,
+    limits: Limits | None = None,
 ) -> tuple[Todo, str]:
     """Shared transition body: load-or-404, set status + side effects, audit, return.
 
     ``extra`` carries the verb's owned side-effect columns (e.g. ``completed_at`` /
-    ``blocked_reason``); ``updated_at`` is always bumped. Returns
-    ``(Todo, previous_status)`` so the tool can report what it moved FROM.
+    ``blocked_reason``); ``updated_at`` is always bumped. A move that makes a finished,
+    unarchived to-do open again counts toward ``limits``. The status that decides it is read
+    under a row lock held to commit, so a concurrent move of the same to-do cannot make it
+    stale. Returns ``(Todo, previous_status)`` so the tool can report what it moved FROM.
     """
-    row = await _resolve_todo(conn, ctx, todo_id)  # 404 if out of scope
-    todo_id = row["id"]
+    todo_id = (await _resolve_todo(conn, ctx, todo_id))["id"]  # 404 if out of scope
+    row = await _one(
+        conn,
+        select(todo.c.status, todo.c.archived_at).where(todo.c.id == todo_id).with_for_update(),
+    )
+    if row is None:
+        raise TodoNotFoundError(todo_id)
     previous_status = row["status"]
     values = {"status": new_status, **extra, "updated_at": _now()}
     await conn.execute(todo.update().where(todo.c.id == todo_id).values(**values))
+    if not _counts_as_open(previous_status, row["archived_at"]) and _counts_as_open(
+        new_status, row["archived_at"]
+    ):
+        await _enforce_limits(conn, ctx, limits, open_todos=True)
     fresh = await _todo_row(conn, todo_id)
     await write_audit(conn, ctx, todo_id=todo_id, action=action, outcome="ok", detail=detail)
     return Todo.from_row(fresh), previous_status
 
 
-async def start_todo(conn: AsyncConnection, ctx: Principal, *, todo_id: str) -> tuple[Todo, str]:
+async def start_todo(
+    conn: AsyncConnection, ctx: Principal, *, todo_id: str, limits: Limits | None = None
+) -> tuple[Todo, str]:
     """→ ``in_progress``; clears ``blocked_reason``. Returns ``(Todo, previous_status)``."""
     return await _transition(
         conn,
@@ -1022,6 +1136,7 @@ async def start_todo(conn: AsyncConnection, ctx: Principal, *, todo_id: str) -> 
         action="start",
         new_status="in_progress",
         extra={"blocked_reason": None},
+        limits=limits,
     )
 
 
@@ -1038,7 +1153,12 @@ async def complete_todo(conn: AsyncConnection, ctx: Principal, *, todo_id: str) 
 
 
 async def block_todo(
-    conn: AsyncConnection, ctx: Principal, *, todo_id: str, reason: str
+    conn: AsyncConnection,
+    ctx: Principal,
+    *,
+    todo_id: str,
+    reason: str,
+    limits: Limits | None = None,
 ) -> tuple[Todo, str]:
     """→ ``blocked``; sets ``blocked_reason``. Returns ``(Todo, previous_status)``.
 
@@ -1057,10 +1177,13 @@ async def block_todo(
         action="block",
         new_status="blocked",
         extra={"blocked_reason": cleaned},
+        limits=limits,
     )
 
 
-async def reopen_todo(conn: AsyncConnection, ctx: Principal, *, todo_id: str) -> tuple[Todo, str]:
+async def reopen_todo(
+    conn: AsyncConnection, ctx: Principal, *, todo_id: str, limits: Limits | None = None
+) -> tuple[Todo, str]:
     """→ ``open``; clears ``completed_at`` and ``blocked_reason``. Returns ``(Todo, previous_status)``."""
     return await _transition(
         conn,
@@ -1069,6 +1192,7 @@ async def reopen_todo(conn: AsyncConnection, ctx: Principal, *, todo_id: str) ->
         action="reopen",
         new_status="open",
         extra={"completed_at": None, "blocked_reason": None},
+        limits=limits,
     )
 
 
@@ -1492,6 +1616,7 @@ async def create_board(
     description: str | None = None,
     columns: list[dict[str, Any]] | None = None,
     key: str | None = None,
+    limits: Limits | None = None,
 ) -> Board:
     """Create a (non-default) board; ``columns`` defaults to the four canonical lanes.
 
@@ -1504,7 +1629,7 @@ async def create_board(
     free in the workspace; omitted, it is derived from ``name``
     (:func:`mcp_todos.keys.derive_board_key`). A taken key, or a name whose derived key
     has no free suffix left, is a ``ValueError`` (→ ``invalid_request``). ``TODO`` is the
-    default board's.
+    default board's. The new board counts toward ``limits.max_boards``.
     """
     _check_len("name", name, _CAP_BOARD_NAME)
     _check_len("description", description, _CAP_DESCRIPTION)
@@ -1577,6 +1702,7 @@ async def create_board(
             )
     else:
         raise ValueError("could not reserve a board key; pass an explicit key and retry")
+    await _enforce_limits(conn, ctx, limits, boards=True)
     row = await _board_row(conn, board_id)
     await write_audit(conn, ctx, todo_id=board_id, action="create", outcome="ok")
     return Board.from_row(row)

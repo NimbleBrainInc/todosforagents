@@ -3,7 +3,9 @@
 | Concern    | Here                                                                 |
 |------------|----------------------------------------------------------------------|
 | identity   | always ``Scope("local", "local")``; request headers are ignored      |
+| auth       | none from FastMCP; ``wrap_http`` guards HTTP itself                  |
 | session    | aiosqlite, WAL, ``BEGIN IMMEDIATE``, busy timeout, foreign keys on   |
+| limits     | none                                                                 |
 | record     | nothing                                                              |
 | attach     | nothing beyond the core's tools, skill and UI                        |
 | lifespan   | the schema upgraded (:mod:`mcp_todos_local.schema`) before serving   |
@@ -24,11 +26,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastmcp import FastMCP
+from fastmcp.server.auth import AuthProvider
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from starlette.types import ASGIApp
 
-from mcp_todos.runtime import Overloaded, Scope, TodoEvent
+from mcp_todos.runtime import Limits, Overloaded, Scope, TodoEvent
 from mcp_todos_local import auth, schema, sqlite
 from mcp_todos_local.config import database_path
 from mcp_todos_local.http import LoopbackGuard
@@ -58,6 +61,14 @@ class LocalRuntime:
 
     def identity(self) -> Scope:
         return LOCAL_SCOPE
+
+    def auth(self) -> AuthProvider | None:
+        # Local HTTP has no authorization server to point a client at: the loopback checks
+        # and the per-install bearer token in wrap_http guard it.
+        return None
+
+    def limits(self, scope: Scope) -> Limits | None:
+        return None
 
     @asynccontextmanager
     async def session(self, scope: Scope) -> AsyncGenerator[AsyncConnection]:

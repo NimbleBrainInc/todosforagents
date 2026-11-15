@@ -60,6 +60,7 @@ from nimblebrain_server_sdk.errors import rate_limited_tool_error
 from mcp_todos.db import store
 from mcp_todos.db.store import (
     BoardNotFoundError,
+    LimitExceededError,
     TodoNotFoundError,
 )
 from mcp_todos.models import PlanItem, Status, Todo, dump
@@ -81,16 +82,23 @@ _runtime: Runtime | None = None
 
 
 def install(rt: Runtime) -> Runtime:
-    """Bind ``rt`` as this process's runtime and let it attach what it serves.
+    """Bind ``rt`` as this process's runtime, set its auth provider, and let it attach.
 
     A process serves one runtime: binding a second, different one is refused rather than
     letting tools and routes disagree about where identity comes from.
+
+    The runtime is chosen after this module builds ``mcp``, so its auth provider cannot go to
+    the ``FastMCP`` constructor. It does not need to: ``FastMCP.auth`` is read when
+    ``http_app()`` builds the Starlette app, which happens after this (``app`` installs the
+    runtime first). Setting it here puts the provider's middleware, its 401 challenge and its
+    metadata routes in front of the MCP endpoint, the same as passing ``auth=`` would.
     """
     global _runtime
     if _runtime is not None:
         if _runtime is rt:
             return rt
         raise RuntimeError(f"the {_runtime.name!r} runtime is already installed")
+    mcp.auth = rt.auth()
     rt.attach(mcp)
     _runtime = rt
     return rt
@@ -190,6 +198,29 @@ HIDE = CHANGES.model_copy(update={"idempotent_hint": False, **_CLOSED})
 
 
 # --------------------------------------------------------------------------- #
+# ChatGPT's keys. ChatGPT reads two OpenAI-specific ``_meta`` keys beside the  #
+# MCP Apps ones; the source of truth is the OpenAI Apps SDK reference,         #
+# https://developers.openai.com/plugins/reference. They are plain metadata,    #
+# the same in every runtime, and other hosts ignore them.                      #
+# --------------------------------------------------------------------------- #
+
+#: On every tool. ``openai/widgetAccessible`` defaults to ``false``, and ChatGPT reads it to
+#: decide whether a widget may call the tool. The board calls the reads, the transition verbs
+#: and ``reorder_todos`` from its frame, and no tool is for the model alone, so every tool
+#: carries ``true``.
+CHATGPT_TOOL_META: dict[str, Any] = {"openai/widgetAccessible": True}
+
+#: The product's origin, which ChatGPT renders the board under. ``openai/widgetDomain`` is
+#: ChatGPT's alias for ``_meta.ui.domain``. The alias carries it rather than ``ui.domain``
+#: because other MCP Apps hosts validate ``ui.domain`` against domains of their own. It names
+#: the product, not a deployment, so it is a constant.
+CHATGPT_WIDGET_DOMAIN = "https://todosforagents.com"
+
+#: On the board UI resource and its build template, in the listing and in what a read returns.
+CHATGPT_UI_META: dict[str, Any] = {"openai/widgetDomain": CHATGPT_WIDGET_DOMAIN}
+
+
+# --------------------------------------------------------------------------- #
 # Error mapping: never let a store/auth/validation error become a 500/stack     #
 # trace on the wire. Out-of-scope → not_found (404 semantics, no existence       #
 # oracle); auth/validation → structured tool error.                             #
@@ -269,6 +300,31 @@ def _invalid(message: str) -> Any:
     return _error("invalid_request", message, "Correct the argument and retry.")
 
 
+#: Where a refused caller can go when the limit is the deployment's, not the work's.
+_NO_LIMITS_HINT = "Or run Todos for Agents locally (uvx todosforagents), where there are no limits."
+
+
+def _limit_refused(exc: LimitExceededError) -> Any:
+    """The ``invalid_request`` tool error for a write that would exceed the runtime's limits.
+
+    ``limit`` names the :class:`~mcp_todos.runtime.Limits` field that refused it, so a client
+    can tell this refusal from a bad argument without a new error code.
+    """
+    if exc.limit == "max_boards":
+        runtime().record(TodoEvent.BOARD_LIMIT_REFUSED)
+        next_step = (
+            "Add the to-dos to a board that already exists (list_boards shows them). "
+            f"{_NO_LIMITS_HINT}"
+        )
+    else:
+        runtime().record(TodoEvent.OPEN_TODO_LIMIT_REFUSED)
+        next_step = (
+            "Complete, cancel or archive to-dos that are finished or no longer needed to free "
+            f"room, then retry. {_NO_LIMITS_HINT}"
+        )
+    return _error("invalid_request", str(exc), next_step, limit=exc.limit)
+
+
 def _internal_error(exc: Exception, *, where: str) -> Any:
     """A generic internal-error tool result — the final safety net for the unexpected.
 
@@ -344,11 +400,15 @@ async def _handle_tool_error(sctx: Scope, *, entity: str, action: str, exc: Exce
 
     Centralizes the except-branch handling shared by every tool: a NotFound is a
     ``denied`` attempt (out-of-scope/absent id) that returns the ``not_found``
-    shape; a ValueError/TypeError is an ``error`` attempt (bad argument) that
-    returns the ``invalid_request`` shape. ``AuthError`` is handled by the caller
-    BEFORE a scope exists (no tenant/workspace to scope an audit row to),
-    so it never reaches here.
+    shape; a limit refusal is a ``denied`` attempt that returns the ``invalid_request``
+    shape with a ``limit`` field; a ValueError/TypeError is an ``error`` attempt (bad
+    argument) that returns the ``invalid_request`` shape. ``AuthError`` is handled by the
+    caller BEFORE a scope exists (no tenant/workspace to scope an audit row to), so it never
+    reaches here.
     """
+    if isinstance(exc, LimitExceededError):
+        await _audit_attempt(sctx, entity=entity, action=action, outcome="denied")
+        return _limit_refused(exc)
     if isinstance(exc, TodoNotFoundError):
         await _audit_attempt(sctx, entity="todo", action=action, outcome="denied", todo_id=str(exc))
         return _not_found("todo", str(exc))
@@ -393,7 +453,7 @@ BOARD_UI_BOUND_URI = f"{BOARD_UI_URI}/{BOARD_UI_BUILD}"
 _BOARD_UI_APP = AppConfig(prefers_border=True, csp=ResourceCSP())
 
 
-@mcp.resource(BOARD_UI_URI, app=_BOARD_UI_APP)
+@mcp.resource(BOARD_UI_URI, app=_BOARD_UI_APP, meta=CHATGPT_UI_META)
 def todos_ui() -> str:
     """The To-dos board UI: static HTML, holding no data, that an MCP Apps host renders in a frame.
 
@@ -406,7 +466,7 @@ def todos_ui() -> str:
 
 # Any build key resolves to the current UI, so a conversation or a tool list that names an
 # older build still renders the board. The key selects nothing and is never echoed.
-@mcp.resource(f"{BOARD_UI_URI}/{{build}}", app=_BOARD_UI_APP)
+@mcp.resource(f"{BOARD_UI_URI}/{{build}}", app=_BOARD_UI_APP, meta=CHATGPT_UI_META)
 def todos_ui_build(build: str) -> str:
     """The To-dos app UI under a build key. Every key serves the current build."""
     del build
@@ -418,7 +478,7 @@ def todos_ui_build(build: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-@mcp.tool(annotations=ADD)
+@mcp.tool(annotations=ADD, meta=CHATGPT_TOOL_META)
 async def create_todo(
     title: str,
     details: str | None = None,
@@ -484,8 +544,15 @@ async def create_todo(
                 blocked_reason=blocked_reason,
                 idempotency_key=idempotency_key,
                 source=source,
+                limits=runtime().limits(sctx),
             )
-    except (BoardNotFoundError, TodoNotFoundError, ValueError, TypeError) as exc:
+    except (
+        BoardNotFoundError,
+        TodoNotFoundError,
+        LimitExceededError,
+        ValueError,
+        TypeError,
+    ) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="create", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="create_todo")
@@ -503,7 +570,7 @@ async def create_todo(
     }
 
 
-@mcp.tool(annotations=ADD)
+@mcp.tool(annotations=ADD, meta=CHATGPT_TOOL_META)
 async def plan_todos(
     todos: list[PlanItem],
     board_id: str | None = None,
@@ -544,8 +611,15 @@ async def plan_todos(
                 board_id=board_id,
                 parent_id=parent_id,
                 idempotency_key=idempotency_key,
+                limits=runtime().limits(sctx),
             )
-    except (BoardNotFoundError, TodoNotFoundError, ValueError, TypeError) as exc:
+    except (
+        BoardNotFoundError,
+        TodoNotFoundError,
+        LimitExceededError,
+        ValueError,
+        TypeError,
+    ) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="plan", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="plan_todos")
@@ -566,7 +640,7 @@ async def plan_todos(
 # --------------------------------------------------------------------------- #
 
 
-@mcp.tool(annotations=EDIT)
+@mcp.tool(annotations=EDIT, meta=CHATGPT_TOOL_META)
 async def update_todo(
     todo_id: str,
     title: str | None = None,
@@ -637,7 +711,7 @@ async def update_todo(
 # --------------------------------------------------------------------------- #
 
 
-@mcp.tool(annotations=MOVE)
+@mcp.tool(annotations=MOVE, meta=CHATGPT_TOOL_META)
 async def start_todo(todo_id: str, ctx: Context | None = None) -> dict:
     """Mark a to-do in progress: work on it has begun.
 
@@ -656,8 +730,10 @@ async def start_todo(todo_id: str, ctx: Context | None = None) -> dict:
         return _auth_error(exc)
     try:
         async with runtime().session(sctx) as conn:
-            todo_obj, previous_status = await store.start_todo(conn, sctx, todo_id=todo_id)
-    except (TodoNotFoundError, ValueError, TypeError) as exc:
+            todo_obj, previous_status = await store.start_todo(
+                conn, sctx, todo_id=todo_id, limits=runtime().limits(sctx)
+            )
+    except (TodoNotFoundError, LimitExceededError, ValueError, TypeError) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="start", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="start_todo")
@@ -672,7 +748,7 @@ async def start_todo(todo_id: str, ctx: Context | None = None) -> dict:
     }
 
 
-@mcp.tool(annotations=MOVE_STAMPED)
+@mcp.tool(annotations=MOVE_STAMPED, meta=CHATGPT_TOOL_META)
 async def complete_todo(todo_id: str, ctx: Context | None = None) -> dict:
     """Mark a to-do done: the work is finished. Sets ``completed_at``.
 
@@ -705,7 +781,7 @@ async def complete_todo(todo_id: str, ctx: Context | None = None) -> dict:
     }
 
 
-@mcp.tool(annotations=MOVE)
+@mcp.tool(annotations=MOVE, meta=CHATGPT_TOOL_META)
 async def block_todo(todo_id: str, reason: str, ctx: Context | None = None) -> dict:
     """Mark a to-do blocked: it is waiting on something outside it (a person, a review).
 
@@ -726,9 +802,9 @@ async def block_todo(todo_id: str, reason: str, ctx: Context | None = None) -> d
     try:
         async with runtime().session(sctx) as conn:
             todo_obj, previous_status = await store.block_todo(
-                conn, sctx, todo_id=todo_id, reason=reason
+                conn, sctx, todo_id=todo_id, reason=reason, limits=runtime().limits(sctx)
             )
-    except (TodoNotFoundError, ValueError, TypeError) as exc:
+    except (TodoNotFoundError, LimitExceededError, ValueError, TypeError) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="block", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="block_todo")
@@ -744,7 +820,7 @@ async def block_todo(todo_id: str, reason: str, ctx: Context | None = None) -> d
     }
 
 
-@mcp.tool(annotations=MOVE)
+@mcp.tool(annotations=MOVE, meta=CHATGPT_TOOL_META)
 async def reopen_todo(todo_id: str, ctx: Context | None = None) -> dict:
     """Put a to-do back to open: it was done, cancelled or blocked, and is to do again.
 
@@ -763,8 +839,10 @@ async def reopen_todo(todo_id: str, ctx: Context | None = None) -> dict:
         return _auth_error(exc)
     try:
         async with runtime().session(sctx) as conn:
-            todo_obj, previous_status = await store.reopen_todo(conn, sctx, todo_id=todo_id)
-    except (TodoNotFoundError, ValueError, TypeError) as exc:
+            todo_obj, previous_status = await store.reopen_todo(
+                conn, sctx, todo_id=todo_id, limits=runtime().limits(sctx)
+            )
+    except (TodoNotFoundError, LimitExceededError, ValueError, TypeError) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="reopen", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="reopen_todo")
@@ -776,7 +854,7 @@ async def reopen_todo(todo_id: str, ctx: Context | None = None) -> dict:
     }
 
 
-@mcp.tool(annotations=MOVE_STAMPED)
+@mcp.tool(annotations=MOVE_STAMPED, meta=CHATGPT_TOOL_META)
 async def cancel_todo(todo_id: str, ctx: Context | None = None) -> dict:
     """Mark a to-do cancelled: it will not be done. Sets ``completed_at``; takes no reason.
 
@@ -813,7 +891,7 @@ async def cancel_todo(todo_id: str, ctx: Context | None = None) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-@mcp.tool(annotations=EDIT)
+@mcp.tool(annotations=EDIT, meta=CHATGPT_TOOL_META)
 async def reorder_todos(
     board_id: str,
     status: Status,
@@ -853,7 +931,7 @@ async def reorder_todos(
     }
 
 
-@mcp.tool(annotations=HIDE)
+@mcp.tool(annotations=HIDE, meta=CHATGPT_TOOL_META)
 async def archive_todo(todo_id: str, ctx: Context | None = None) -> dict:
     """Hide a to-do from default views, leaving its status as it is.
 
@@ -890,7 +968,7 @@ async def archive_todo(todo_id: str, ctx: Context | None = None) -> dict:
 # --------------------------------------------------------------------------- #
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=READ, meta=CHATGPT_TOOL_META)
 async def list_todos(
     board_id: str | None = None,
     status: Status | None = None,
@@ -971,6 +1049,7 @@ async def list_todos(
 # board for get_board_summary. The UI also calls it from its frame, so both audiences may.
 @mcp.tool(
     annotations=READ,
+    meta=CHATGPT_TOOL_META,
     app=AppConfig(resource_uri=BOARD_UI_BOUND_URI, visibility=["model", "app"]),
 )
 async def get_todo(todo_id: str, ctx: Context | None = None) -> dict:
@@ -1017,7 +1096,7 @@ async def get_todo(todo_id: str, ctx: Context | None = None) -> dict:
     }
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=READ, meta=CHATGPT_TOOL_META)
 async def get_next_todo(board_id: str | None = None, ctx: Context | None = None) -> dict:
     """The to-do to work on next: the highest-priority open, unarchived to-do.
 
@@ -1057,6 +1136,7 @@ async def get_next_todo(board_id: str | None = None, ctx: Context | None = None)
 # so both audiences may.
 @mcp.tool(
     annotations=READ,
+    meta=CHATGPT_TOOL_META,
     app=AppConfig(resource_uri=BOARD_UI_BOUND_URI, visibility=["model", "app"]),
 )
 async def get_board_summary(board_id: str | None = None, ctx: Context | None = None) -> dict:
@@ -1099,7 +1179,7 @@ async def get_board_summary(board_id: str | None = None, ctx: Context | None = N
 # --------------------------------------------------------------------------- #
 
 
-@mcp.tool(annotations=READ)
+@mcp.tool(annotations=READ, meta=CHATGPT_TOOL_META)
 async def list_boards(ctx: Context | None = None) -> dict:
     """List the workspace's boards, each with its id, key and lanes.
 
@@ -1127,7 +1207,7 @@ async def list_boards(ctx: Context | None = None) -> dict:
     }
 
 
-@mcp.tool(annotations=ADD)
+@mcp.tool(annotations=ADD, meta=CHATGPT_TOOL_META)
 async def create_board(
     name: str,
     description: str | None = None,
@@ -1158,9 +1238,15 @@ async def create_board(
     try:
         async with runtime().session(sctx) as conn:
             board_obj = await store.create_board(
-                conn, sctx, name=name, description=description, columns=columns, key=key
+                conn,
+                sctx,
+                name=name,
+                description=description,
+                columns=columns,
+                key=key,
+                limits=runtime().limits(sctx),
             )
-    except (ValueError, TypeError) as exc:
+    except (LimitExceededError, ValueError, TypeError) as exc:
         return await _handle_tool_error(sctx, entity="board", action="create", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="create_board")
@@ -1175,7 +1261,7 @@ async def create_board(
     }
 
 
-@mcp.tool(annotations=EDIT)
+@mcp.tool(annotations=EDIT, meta=CHATGPT_TOOL_META)
 async def update_board(
     board_id: str,
     name: str | None = None,

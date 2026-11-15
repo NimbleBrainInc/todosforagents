@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from typing import Any
 
 import pytest
 from conftest import make_ctx, session_for
@@ -187,13 +188,14 @@ async def test_every_todo_argument_takes_a_key(app_engine) -> None:
         updated = await store.update_todo(conn, ctx, todo_id="MAG-4", title="x", parent_id="MAG-2")
         assert updated.id == other.id and updated.parent_id == step.id
 
-        for verb, kwargs, status in [
+        moves: list[tuple[Any, dict[str, Any], str]] = [
             (store.start_todo, {}, "in_progress"),
             (store.block_todo, {"reason": "r"}, "blocked"),
             (store.reopen_todo, {}, "open"),
             (store.complete_todo, {}, "done"),
             (store.cancel_todo, {}, "cancelled"),
-        ]:
+        ]
+        for verb, kwargs, status in moves:
             moved, _ = await verb(conn, ctx, todo_id="mag-2", **kwargs)
             assert moved.id == step.id and moved.status == status
 

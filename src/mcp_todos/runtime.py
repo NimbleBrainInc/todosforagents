@@ -1,11 +1,12 @@
 """The runtime contract: what a deployment supplies, and how one is chosen.
 
 The core (models, tables, store, tools, UI, skill) is the same in every deployment. What
-differs is a small set of implementations, a **runtime**: where identity comes from, how a
-database session opens, what an event records, what else the server serves, and what wraps
-its HTTP app. Configuration chooses the runtime: ``TODOS_RUNTIME`` names one, and each
-installed runtime registers itself under the ``mcp_todos.runtimes`` entry-point group, so this
-module names no runtime package.
+differs is a small set of implementations, a **runtime**: where identity comes from, which
+bearer tokens the HTTP transport accepts, how a database session opens, what limits a scope
+works under, what an event records, what else the server serves, and what wraps its HTTP app.
+Configuration chooses the runtime: ``TODOS_RUNTIME`` names one, and each installed runtime
+registers itself under the ``mcp_todos.runtimes`` entry-point group, so this module names no
+runtime package.
 
 The server refuses to start when ``TODOS_RUNTIME`` is unset or names no installed runtime. It
 never infers one from other settings: a multi-principal deployment that silently fell back to
@@ -27,12 +28,14 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 if TYPE_CHECKING:
     from fastmcp import FastMCP
+    from fastmcp.server.auth import AuthProvider
     from starlette.types import ASGIApp
 
 __all__ = [
     "ENTRY_POINT_GROUP",
     "RUNTIME_ENV",
     "AuthError",
+    "Limits",
     "Overloaded",
     "Principal",
     "Runtime",
@@ -72,6 +75,23 @@ class Scope:
     def identity_columns(self) -> dict[str, str]:
         """The ``tenant_id`` / ``workspace_id`` columns a row written under this scope carries."""
         return {"tenant_id": self.tenant_id, "workspace_id": self.workspace_id}
+
+
+@dataclass(frozen=True)
+class Limits:
+    """How much a scope's tenant may hold. ``None`` in a field means no limit on that count.
+
+    The store enforces them inside the transaction that would exceed one, counting the
+    tenant's rows the caller's session can see. Where row-level security scopes a session to
+    one workspace, that is the caller's workspace, so a limit holds per workspace. It counts
+    every board, and every **open** to-do, one
+    whose status is neither ``done`` nor ``cancelled`` and that is not archived. Completing,
+    cancelling or archiving a to-do frees room; any move that makes a finished to-do open
+    again counts.
+    """
+
+    max_boards: int | None = None
+    max_open_todos: int | None = None
 
 
 class AuthError(Exception):
@@ -115,6 +135,10 @@ class TodoEvent(StrEnum):
     TODO_DENIED = "todo_denied"
     #: A tool resolved a board id to not-found.
     BOARD_DENIED = "board_denied"
+    #: A call was refused because it would exceed :attr:`Limits.max_boards`.
+    BOARD_LIMIT_REFUSED = "board_limit_refused"
+    #: A call was refused because it would exceed :attr:`Limits.max_open_todos`.
+    OPEN_TODO_LIMIT_REFUSED = "open_todo_limit_refused"
 
 
 class Runtime(Protocol):
@@ -127,8 +151,23 @@ class Runtime(Protocol):
         """The calling identity. Raises :class:`AuthError` when none is verified."""
         ...
 
+    def auth(self) -> AuthProvider | None:
+        """The FastMCP auth provider that gates the HTTP transport, or ``None`` for none.
+
+        :func:`mcp_todos.server.install` sets it on the server before the HTTP app is built,
+        so every request without a token it verifies is refused with 401 and a
+        ``WWW-Authenticate`` challenge before any tool runs. ``identity`` then reads the
+        verified token (``fastmcp.server.dependencies.get_access_token``). A runtime that
+        guards HTTP in ``wrap_http`` instead returns ``None``.
+        """
+        ...
+
     def session(self, scope: Scope) -> AbstractAsyncContextManager[AsyncConnection]:
         """One transaction for ``scope``. May raise :class:`Overloaded` on entry."""
+        ...
+
+    def limits(self, scope: Scope) -> Limits | None:
+        """What ``scope`` may hold, or ``None`` when nothing is limited."""
         ...
 
     def record(self, event: TodoEvent, count: int = 1) -> None:
