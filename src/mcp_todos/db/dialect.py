@@ -10,13 +10,31 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, Integer, Table, exists, func, select, type_coerce
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    Integer,
+    Table,
+    exists,
+    func,
+    literal,
+    select,
+    type_coerce,
+)
 from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.engine import Dialect
 from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.types import TypeDecorator
 
-__all__ = ["JSONType", "RowId", "UTCDateTime", "insert_for", "json_array_contains"]
+__all__ = [
+    "JSONType",
+    "RowId",
+    "UTCDateTime",
+    "insert_for",
+    "json_array_contains",
+    "serialize_on",
+]
 
 #: JSONB on Postgres, JSON text on SQLite.
 JSONType = JSON().with_variant(postgresql.JSONB(), "postgresql")
@@ -60,3 +78,19 @@ def json_array_contains(conn: AsyncConnection, column: Any, value: str) -> Any:
         each = func.json_each(column).table_valued("value")
         return exists(select(1).select_from(each).where(each.c.value == value))
     return type_coerce(column, postgresql.JSONB()).contains([value])
+
+
+async def serialize_on(conn: AsyncConnection, key: str) -> None:
+    """Hold a lock named ``key`` until the transaction ends, so transactions that take it run
+    their next statements one at a time.
+
+    On Postgres it is a transaction-scoped advisory lock on a 64-bit hash of ``key``. Under
+    READ COMMITTED, Postgres's default, each statement after it sees what an earlier holder
+    committed. SQLite needs nothing: every transaction already holds the database's write lock
+    from ``BEGIN IMMEDIATE``.
+    """
+    if conn.dialect.name == "sqlite":
+        return
+    await conn.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(literal(key), literal(0))))
+    )

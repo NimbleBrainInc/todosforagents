@@ -92,7 +92,10 @@ def test_every_board_ui_uri_serves_the_same_html_and_meta():
     for entry in entries:
         assert entry.mime_type == "text/html;profile=mcp-app"
         assert entry.content == server.BOARD_UI_HTML
-        assert entry.meta == {"ui": {"csp": {}, "prefersBorder": True}}
+        assert entry.meta == {
+            "openai/widgetDomain": "https://todosforagents.com",
+            "ui": {"csp": {}, "prefersBorder": True},
+        }
 
 
 def test_board_ui_is_read_once_at_import(monkeypatch):

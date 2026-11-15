@@ -23,6 +23,7 @@
         "fastmcp": {
           "tags": []
         },
+        "openai/widgetDomain": "https://todosforagents.com",
         "ui": {
           "csp": {},
           "prefersBorder": true
@@ -51,6 +52,7 @@
         "fastmcp": {
           "tags": []
         },
+        "openai/widgetDomain": "https://todosforagents.com",
         "ui": {
           "csp": {},
           "prefersBorder": true
@@ -68,7 +70,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": true,
@@ -101,7 +104,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -139,7 +143,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -172,7 +177,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -205,7 +211,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -278,7 +285,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -455,6 +463,7 @@
         "fastmcp": {
           "tags": []
         },
+        "openai/widgetAccessible": true,
         "ui": {
           "resourceUri": "ui://todos/main/<build>",
           "visibility": [
@@ -498,7 +507,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "idempotentHint": true,
@@ -536,6 +546,7 @@
         "fastmcp": {
           "tags": []
         },
+        "openai/widgetAccessible": true,
         "ui": {
           "resourceUri": "ui://todos/main/<build>",
           "visibility": [
@@ -574,7 +585,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "idempotentHint": true,
@@ -598,7 +610,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "idempotentHint": true,
@@ -724,7 +737,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -889,7 +903,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -922,7 +937,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": true,
@@ -975,7 +991,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": false,
@@ -1008,7 +1025,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": true,
@@ -1081,7 +1099,8 @@
       "_meta": {
         "fastmcp": {
           "tags": []
-        }
+        },
+        "openai/widgetAccessible": true
       },
       "annotations": {
         "destructiveHint": true,

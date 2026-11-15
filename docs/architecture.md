@@ -17,7 +17,9 @@ A runtime implements the `Runtime` protocol in `mcp_todos/runtime.py`:
 | Member | Answers |
 |---|---|
 | `identity()` | Who is calling. Returns a `Scope` (`tenant_id`, `workspace_id`, optional `user_id` and `correlation_id`), or raises `AuthError` when no verified identity exists |
+| `auth()` | The FastMCP auth provider that gates the HTTP transport, or `None`. A request without a token it verifies gets 401 with a `WWW-Authenticate` challenge before any tool runs, and `identity()` reads the verified token through FastMCP's `get_access_token()` |
 | `session(scope)` | One database transaction for that scope. May raise `Overloaded` on entry, when it has no capacity for the call |
+| `limits(scope)` | A `Limits` (`max_boards`, `max_open_todos`) the store enforces for that scope's tenant, or `None` for no limits |
 | `record(event, count)` | What to do with a domain event (created, completed, blocked, a denied lookup): count it, log it, or ignore it |
 | `attach(mcp)` | What the server serves beyond the core's tools and resources, such as routes or extra resources |
 | `lifespan()` | Startup and shutdown work, such as bringing the schema to head |
@@ -26,6 +28,25 @@ A runtime implements the `Runtime` protocol in `mcp_todos/runtime.py`:
 Every tool does the same three things: it asks the runtime for the caller's identity, opens one
 transaction through the runtime for that identity, and calls the store. **Identity never comes
 from a tool argument**, and no result carries `tenant_id` or `workspace_id`.
+
+The runtime is chosen after `server.py` builds `mcp`, so its auth provider cannot go to the
+`FastMCP` constructor. `install()` sets `mcp.auth` from `auth()` instead: FastMCP reads that
+attribute when `http_app()` builds the Starlette app, and the app is built only after the
+runtime is installed. The local runtime returns `None`; it guards HTTP with its own loopback
+checks and bearer token in `wrap_http`.
+
+### Limits
+
+When `limits(scope)` returns `Limits`, the store counts inside the write's own transaction,
+after the change, and refuses with `invalid_request` when the tenant is over: a board past
+`max_boards` (the auto-created default board included), or an **open** to-do past
+`max_open_todos`. An open to-do is one that is neither `done` nor `cancelled` and is not
+archived, so completing, cancelling or archiving frees room, and any move that makes a finished
+to-do open again (`reopen_todo`, `start_todo`, `block_todo`) counts. An idempotent replay adds
+nothing and is never refused. The count runs under the caller's session, so row-level security
+still applies, and after a transaction-scoped lock on the tenant (an advisory lock on Postgres;
+SQLite's `BEGIN IMMEDIATE` already serializes writers), so concurrent writes cannot both take
+the last slot.
 
 Runtimes register under the `mcp_todos.runtimes` entry-point group, and `TODOS_RUNTIME` names
 the one to use. The generic entry point, `python -m mcp_todos`, refuses to start when
@@ -89,6 +110,13 @@ it instead of rendering a stale copy. Any key resolves to the current UI, so a c
 tool list that names an older build still renders. The listed resource stays
 `ui://todos/main`, so a host placement that names it keeps working across builds.
 
+ChatGPT reads two keys of its own beside the MCP Apps ones, both defined in the OpenAI Apps
+SDK reference (<https://developers.openai.com/plugins/reference>). Every tool carries
+`openai/widgetAccessible: true`, so the board can call the tools it uses from its frame. The
+board resource and its build template carry `openai/widgetDomain:
+"https://todosforagents.com"`, ChatGPT's alias for `ui.domain`; the alias holds it because other
+hosts check `ui.domain` against domains of their own.
+
 The frame's content security policy allows no outside origin, since the board loads nothing
 from elsewhere. Markdown in a to-do's details is sanitized before it is rendered.
 
@@ -103,7 +131,7 @@ A failure is a tool result flagged `isError`, with one body:
 | Code | When |
 |---|---|
 | `not_found` | The id or key names nothing the caller can see. An absent record and one outside the caller's scope are indistinguishable |
-| `invalid_request` | An argument is wrong; nothing was changed |
+| `invalid_request` | An argument is wrong, or the write would pass one of the runtime's limits; nothing was changed. A limit refusal carries `limit` (`max_boards` or `max_open_todos`) in the envelope |
 | `unauthenticated` | The runtime established no identity. Returned before any database session opens |
 | `rate_limited` | The runtime had no capacity for the call and ran nothing; a retry is safe |
 | `internal_error` | Anything else. The message is fixed and generic; the details go to the server log |
