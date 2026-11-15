@@ -141,20 +141,19 @@ jobs:
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
           python-version: "3.13"
-      - name: Wait for PyPI to serve this version
+      # PyPI's index can list a new upload before uv resolves it, so the lock itself is what
+      # waits: it retries until uv can resolve this version.
+      - name: Lock the bundle against PyPI, once PyPI serves this version
         env:
           TAG: ${{ github.ref_name }}
         run: |
           for _ in $(seq 1 30); do
-            if curl -fsS "https://pypi.org/simple/todosforagents/" \
-              | grep -q "todosforagents-${TAG#v}-py3-none-any.whl"; then
+            if uv lock --directory mcpb --refresh; then
               exit 0
             fi
             sleep 10
           done
-          echo "PyPI does not serve todosforagents ${TAG#v} after 5 minutes"; exit 1
-      - name: Lock the bundle against PyPI
-        run: uv lock --directory mcpb --refresh
+          echo "uv cannot resolve todosforagents ${TAG#v} from PyPI after 5 minutes"; exit 1
       - run: uv sync --locked
       - name: Start the bundle's own command from its lock
         run: |
