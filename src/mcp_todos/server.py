@@ -316,6 +316,20 @@ def _limit_refused(exc: LimitExceededError) -> Any:
             "Add the to-dos to a board that already exists (list_boards shows them). "
             f"{_NO_LIMITS_HINT}"
         )
+    elif exc.limit == "max_total_todos":
+        runtime().record(TodoEvent.TOTAL_TODO_LIMIT_REFUSED)
+        next_step = (
+            "This account has reached its lifetime allowance of to-dos, and finishing or "
+            "archiving to-dos does not free room. Run Todos for Agents locally (uvx "
+            "todosforagents), where there are no limits, or export the to-dos you have "
+            "(list_todos and get_todo read every one)."
+        )
+    elif exc.limit == "max_details_bytes":
+        runtime().record(TodoEvent.DETAILS_LIMIT_REFUSED)
+        next_step = (
+            "Shorten the details to fit the limit, then retry; keep long material elsewhere and "
+            f"link to it. {_NO_LIMITS_HINT}"
+        )
     else:
         runtime().record(TodoEvent.OPEN_TODO_LIMIT_REFUSED)
         next_step = (
@@ -691,8 +705,9 @@ async def update_todo(
                 assignee=assignee,
                 due_at=due_at,
                 parent_id=parent_id,
+                limits=runtime().limits(sctx),
             )
-    except (TodoNotFoundError, ValueError, TypeError) as exc:
+    except (TodoNotFoundError, LimitExceededError, ValueError, TypeError) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="update", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="update_todo")

@@ -4,10 +4,10 @@
 # package's version (tests/test_mcpb.py).
 [project]
 name = "todosforagents-mcpb"
-version = "0.2.0"
+version = "0.3.0"
 description = "The Todos for Agents MCP bundle: runs the todosforagents package with uv."
 requires-python = ">=3.13,<3.15"
-dependencies = ["todosforagents==0.2.0"]
+dependencies = ["todosforagents==0.3.0"]
 
 [tool.uv]
 package = false

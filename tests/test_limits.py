@@ -1,10 +1,13 @@
-"""A runtime's limits: how many boards and open to-dos a tenant may hold.
+"""A runtime's limits: how many boards, open to-dos and to-dos in all a tenant may hold, and
+how long one to-do's details may be.
 
 ``Runtime.limits(scope)`` returns :class:`~mcp_todos.runtime.Limits` or ``None``. The store
 counts inside the write's own transaction, after the change, and refuses with
 :class:`~mcp_todos.db.store.LimitExceededError`, so a refused write keeps nothing. An open
 to-do is one that is neither ``done`` nor ``cancelled`` and not archived; any write that makes
-one open counts (a create, a plan, and a start, block or reopen of a finished to-do).
+one open counts (a create, a plan, and a start, block or reopen of a finished to-do). The
+lifetime total counts every to-do, whatever its status, archived included; every create and
+plan counts toward it. The details limit is checked before a create, plan or update writes.
 
 At the tool boundary a refusal is the ``invalid_request`` error with a ``limit`` field, and its
 ``next_step`` says how to free room or where there are no limits. The tool surface is unchanged.
@@ -364,3 +367,307 @@ async def test_a_refused_create_board_is_invalid_request_with_the_limit(
     assert "list_boards" in err["next_step"]
     assert "locally" in err["next_step"]
     assert TodoEvent.BOARD_LIMIT_REFUSED in limited
+
+
+# --------------------------------------------------------------------------- #
+# Lifetime total                                                               #
+# --------------------------------------------------------------------------- #
+
+TOTAL_3 = Limits(max_total_todos=3)
+
+
+async def _boards() -> list[str]:
+    async with session_for(CTX) as conn:
+        return [b.name for b in await store.list_boards(conn, CTX)]
+
+
+@pytest.mark.parametrize("status", ["open", "in_progress", "done", "cancelled"])
+async def test_a_create_past_the_total_is_refused_whatever_its_status(
+    app_engine, status: str
+) -> None:
+    await _create("one", limits=TOTAL_3)
+    await _create("two", limits=TOTAL_3, status="done")
+    await _create("three", limits=TOTAL_3, status="cancelled")  # exactly at the total: kept
+    with pytest.raises(LimitExceededError) as refused:
+        await _create("four", limits=TOTAL_3, status=status)
+    assert refused.value.limit == "max_total_todos"
+    assert refused.value.maximum == 3
+    assert "lifetime allowance of 3 to-dos" in str(refused.value)
+    assert await _todo_titles() == ["one", "three", "two"]
+    # The refused create claimed no number.
+    fourth = await _create("four", limits=None)
+    assert fourth.key == "TODO-4"
+
+
+async def test_finishing_or_archiving_frees_no_room_in_the_total(app_engine) -> None:
+    limits = Limits(max_total_todos=2)
+    for title in ("one", "two"):
+        made = await _create(title, limits=limits)
+        await _move("complete", made.id)
+    await _move("archive", made.id)
+    with pytest.raises(LimitExceededError) as refused:
+        await _create("three", limits=limits)
+    assert refused.value.limit == "max_total_todos"
+
+
+async def test_the_total_counts_every_board(app_engine) -> None:
+    async with session_for(CTX) as conn:
+        launch = await store.create_board(conn, CTX, name="Launch")
+    await _create("default board", limits=Limits(max_total_todos=2))
+    await _create("launch", limits=Limits(max_total_todos=2), board_id=launch.key)
+    with pytest.raises(LimitExceededError):
+        await _create("either", limits=Limits(max_total_todos=2), board_id=launch.key)
+
+
+@pytest.mark.parametrize("status", ["done", "cancelled"])
+async def test_a_plan_of_finished_steps_counts_toward_the_total(app_engine, status: str) -> None:
+    async with session_for(CTX) as conn:
+        _, created = await store.plan_todos(
+            conn,
+            CTX,
+            todos=[{"title": t, "status": status} for t in ("a", "b", "c")],
+            limits=TOTAL_3,
+        )
+    assert created == 3  # exactly at the total
+    with pytest.raises(LimitExceededError) as refused:
+        async with session_for(CTX) as conn:
+            await store.plan_todos(
+                conn, CTX, todos=[{"title": "d", "status": status}], limits=TOTAL_3
+            )
+    assert refused.value.limit == "max_total_todos"
+    assert await _todo_titles() == ["a", "b", "c"]
+
+
+async def test_a_plan_past_the_total_is_refused_whole(app_engine) -> None:
+    await _create("one", limits=TOTAL_3)
+    with pytest.raises(LimitExceededError):
+        async with session_for(CTX) as conn:
+            await store.plan_todos(
+                conn,
+                CTX,
+                todos=[{"title": "a", "status": "done"}, {"title": "b"}, {"title": "c"}],
+                limits=TOTAL_3,
+            )
+    assert await _todo_titles() == ["one"]
+    # Nothing was claimed: the next to-do is still TODO-2.
+    second = await _create("two", limits=TOTAL_3)
+    assert second.key == "TODO-2"
+
+
+async def test_an_idempotent_replay_at_the_total_is_not_refused(app_engine) -> None:
+    first = await _create("one", limits=TOTAL_3, idempotency_key="k1")
+    steps: list[Any] = [{"title": "a", "status": "done"}, {"title": "b", "status": "done"}]
+    async with session_for(CTX) as conn:
+        await store.plan_todos(conn, CTX, todos=steps, idempotency_key="p", limits=TOTAL_3)
+    async with session_for(CTX) as conn:
+        again, action = await store.create_todo(
+            conn, CTX, title="one", idempotency_key="k1", limits=TOTAL_3
+        )
+        _, created = await store.plan_todos(
+            conn, CTX, todos=steps, idempotency_key="p", limits=TOTAL_3
+        )
+    assert (again.id, action, created) == (first.id, "matched", 0)
+
+
+async def test_over_both_counts_the_refusal_names_the_total(app_engine) -> None:
+    limits = Limits(max_open_todos=1, max_total_todos=1)
+    await _create("one", limits=limits)
+    with pytest.raises(LimitExceededError) as refused:
+        await _create("two", limits=limits)
+    assert refused.value.limit == "max_total_todos"
+
+
+async def test_the_total_leaves_the_open_count_as_it_was(app_engine) -> None:
+    # With room in the total, the open limit still refuses and still frees on completion.
+    limits = Limits(max_open_todos=1, max_total_todos=10)
+    first = await _create("one", limits=limits)
+    with pytest.raises(LimitExceededError) as refused:
+        await _create("two", limits=limits)
+    assert refused.value.limit == "max_open_todos"
+    await _move("complete", first.id)
+    await _create("two", limits=limits)
+    # A move adds no row, so it never counts toward the total.
+    await _move("reopen", first.id, limits=Limits(max_total_todos=2))
+
+
+async def test_an_unset_total_limits_nothing(app_engine) -> None:
+    for i in range(4):
+        await _create(f"done {i}", limits=Limits(max_open_todos=1), status="done")
+    for i in range(4):
+        await _create(f"unset {i}", limits=Limits(), status="cancelled")
+    assert len(await _todo_titles()) == 8
+
+
+async def test_concurrent_creates_never_pass_the_total(app_engine) -> None:
+    limits = Limits(max_total_todos=5)
+
+    async def attempt(i: int) -> bool:
+        try:
+            if i % 3 == 0:
+                async with session_for(CTX) as conn:
+                    await store.plan_todos(
+                        conn, CTX, todos=[{"title": f"p{i}", "status": "done"}], limits=limits
+                    )
+            else:
+                await _create(f"c{i}", limits=limits, status="done" if i % 2 else "open")
+        except LimitExceededError:
+            return False
+        return True
+
+    outcomes = await asyncio.gather(*(attempt(i) for i in range(12)))
+    assert sum(outcomes) == 5
+    assert len(await _todo_titles()) == 5
+
+
+# --------------------------------------------------------------------------- #
+# Details bytes                                                                #
+# --------------------------------------------------------------------------- #
+
+DETAILS_10 = Limits(max_details_bytes=10)
+
+
+@pytest.mark.parametrize(
+    "details",
+    ["x" * 10, "é" * 5, "  " + "x" * 10 + "\n"],
+    ids=["ascii", "multibyte", "trimmed"],
+)
+async def test_details_at_the_limit_are_kept(app_engine, details: str) -> None:
+    made = await _create("one", limits=DETAILS_10, details=details)
+    async with session_for(CTX) as conn:
+        await store.update_todo(conn, CTX, todo_id=made.id, details=details, limits=DETAILS_10)
+        steps: Any = [{"title": "a", "details": details}]
+        await store.plan_todos(conn, CTX, todos=steps, limits=DETAILS_10)
+
+
+@pytest.mark.parametrize("details", ["x" * 11, "é" * 5 + "x"], ids=["ascii", "multibyte"])
+async def test_a_create_with_details_past_the_limit_is_refused(app_engine, details: str) -> None:
+    with pytest.raises(LimitExceededError) as refused:
+        await _create("one", limits=DETAILS_10, details=details)
+    assert (refused.value.limit, refused.value.maximum) == ("max_details_bytes", 10)
+    assert str(refused.value).startswith("details exceeds")
+    # Refused before anything was written: not even the default board.
+    assert await _todo_titles() == []
+    assert await _boards() == []
+
+
+async def test_a_plan_with_one_step_past_the_details_limit_is_refused_whole(app_engine) -> None:
+    steps: Any = [{"title": "a", "details": "ok"}, {"title": "b", "details": "x" * 11}]
+    with pytest.raises(LimitExceededError) as refused:
+        async with session_for(CTX) as conn:
+            await store.plan_todos(conn, CTX, todos=steps, limits=DETAILS_10)
+    assert refused.value.limit == "max_details_bytes"
+    assert str(refused.value).startswith("todos[1].details exceeds")
+    assert await _todo_titles() == []
+
+
+async def test_an_update_with_details_past_the_limit_changes_nothing(app_engine) -> None:
+    made = await _create("one", details="short")
+    with pytest.raises(LimitExceededError) as refused:
+        async with session_for(CTX) as conn:
+            await store.update_todo(
+                conn, CTX, todo_id=made.id, title="renamed", details="x" * 11, limits=DETAILS_10
+            )
+    assert refused.value.limit == "max_details_bytes"
+    async with session_for(CTX) as conn:
+        kept, *_ = await store.get_todo(conn, CTX, todo_id=made.id)
+    assert (kept.title, kept.details) == ("one", "short")
+
+
+async def test_an_update_that_leaves_long_details_alone_is_not_refused(app_engine) -> None:
+    # Details stored before the limit was set stay; only a write that sets them is checked.
+    made = await _create("one", limits=None, details="x" * 100)
+    async with session_for(CTX) as conn:
+        updated = await store.update_todo(
+            conn, CTX, todo_id=made.id, title="renamed", limits=DETAILS_10
+        )
+    assert updated.details == "x" * 100
+
+
+async def test_the_core_details_cap_still_applies_under_a_larger_limit(app_engine) -> None:
+    huge = Limits(max_details_bytes=10**7)
+    with pytest.raises(ValueError, match="maximum length"):
+        await _create("one", limits=huge, details="x" * 65537)
+    # And it is the cap, not the limit, that refuses a value past both.
+    with pytest.raises(ValueError, match="maximum length"):
+        await _create("one", limits=DETAILS_10, details="x" * 65537)
+    with pytest.raises(ValueError, match="maximum length"):
+        async with session_for(CTX) as conn:
+            steps: Any = [{"title": "a", "details": "x" * 65537}]
+            await store.plan_todos(conn, CTX, todos=steps, limits=DETAILS_10)
+
+
+async def test_an_unset_details_limit_limits_nothing(app_engine) -> None:
+    await _create("none", limits=None, details="x" * 65536)
+    await _create("unset", limits=Limits(max_total_todos=5), details="x" * 65536)
+    assert len(await _todo_titles()) == 2
+
+
+# --------------------------------------------------------------------------- #
+# The tool boundary: lifetime total and details                               #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+def lifetime(monkeypatch: pytest.MonkeyPatch) -> list[TodoEvent]:
+    """The installed runtime limited to two to-dos in all and 10 bytes of details."""
+    events: list[TodoEvent] = []
+    monkeypatch.setattr(
+        RUNTIME, "limits", lambda scope: Limits(max_total_todos=2, max_details_bytes=10)
+    )
+    monkeypatch.setattr(RUNTIME, "record", lambda event, count=1: events.append(event))
+    return events
+
+
+async def test_a_refused_create_past_the_total_is_invalid_request_with_the_limit(
+    app_engine, lifetime: list[TodoEvent]
+) -> None:
+    await server.create_todo(title="one", status="done")
+    await server.create_todo(title="two", status="cancelled")
+    err = error_of(await server.create_todo(title="three", status="done"))
+    assert err == {
+        "code": "invalid_request",
+        "message": "This account has reached its lifetime allowance of 2 to-dos. "
+        "Nothing was changed.",
+        "retryable": False,
+        "limit": "max_total_todos",
+        "next_step": err["next_step"],
+    }
+    assert "lifetime allowance" in err["next_step"]
+    assert "uvx todosforagents" in err["next_step"]
+    assert "export" in err["next_step"]
+    assert TodoEvent.TOTAL_TODO_LIMIT_REFUSED in lifetime
+    assert TodoEvent.OPEN_TODO_LIMIT_REFUSED not in lifetime
+    assert await _denials() == ["create"]
+    steps: Any = [{"title": "a", "status": "done"}]
+    plan = error_of(await server.plan_todos(todos=steps))
+    assert (plan["code"], plan["limit"]) == ("invalid_request", "max_total_todos")
+
+
+@pytest.mark.parametrize("tool", ["create", "plan", "update"])
+async def test_a_refused_details_write_is_invalid_request_with_the_limit(
+    app_engine, lifetime: list[TodoEvent], tool: str
+) -> None:
+    long = "x" * 11
+    if tool == "create":
+        result = await server.create_todo(title="one", details=long)
+        field = "details"
+    elif tool == "plan":
+        steps: Any = [{"title": "a", "details": long}]
+        result = await server.plan_todos(todos=steps)
+        field = "todos[0].details"
+    else:
+        made = await server.create_todo(title="one", details="short")
+        result = await server.update_todo(todo_id=made["todo"]["id"], details=long)
+        field = "details"
+    err = error_of(result)
+    assert err == {
+        "code": "invalid_request",
+        "message": f"{field} exceeds this account's limit of 10 bytes of details per to-do. "
+        "Nothing was changed.",
+        "retryable": False,
+        "limit": "max_details_bytes",
+        "next_step": err["next_step"],
+    }
+    assert "Shorten the details" in err["next_step"]
+    assert TodoEvent.DETAILS_LIMIT_REFUSED in lifetime
+    assert await _denials() == [tool]

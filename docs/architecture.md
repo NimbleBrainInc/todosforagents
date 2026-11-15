@@ -19,7 +19,7 @@ A runtime implements the `Runtime` protocol in `mcp_todos/runtime.py`:
 | `identity()` | Who is calling. Returns a `Scope` (`tenant_id`, `workspace_id`, optional `user_id` and `correlation_id`), or raises `AuthError` when no verified identity exists |
 | `auth()` | The FastMCP auth provider that gates the HTTP transport, or `None`. A request without a token it verifies gets 401 with a `WWW-Authenticate` challenge before any tool runs, and `identity()` reads the verified token through FastMCP's `get_access_token()` |
 | `session(scope)` | One database transaction for that scope. May raise `Overloaded` on entry, when it has no capacity for the call |
-| `limits(scope)` | A `Limits` (`max_boards`, `max_open_todos`) the store enforces for that scope's tenant, or `None` for no limits |
+| `limits(scope)` | A `Limits` (`max_boards`, `max_open_todos`, `max_total_todos`, `max_details_bytes`) the store enforces for that scope's tenant, or `None` for no limits |
 | `record(event, count)` | What to do with a domain event (created, completed, blocked, a denied lookup): count it, log it, or ignore it |
 | `attach(mcp)` | What the server serves beyond the core's tools and resources, such as routes or extra resources |
 | `lifespan()` | Startup and shutdown work, such as bringing the schema to head |
@@ -39,15 +39,31 @@ checks and bearer token in `wrap_http`.
 
 When `limits(scope)` returns `Limits`, the store counts inside the write's own transaction,
 after the change, and refuses with `invalid_request` when the tenant is over: a board past
-`max_boards` (the auto-created default board included), or an **open** to-do past
-`max_open_todos`. An open to-do is one that is neither `done` nor `cancelled` and is not
-archived, so completing, cancelling or archiving frees room, and any move that makes a finished
-to-do open again (`reopen_todo`, `start_todo`, `block_todo`) counts. An idempotent replay adds
-nothing and is never refused. The count runs under the caller's session, so row-level security
-still applies: where it scopes a session to one workspace, a limit holds per workspace. It runs
-after a transaction-scoped lock on the tenant (an advisory lock on Postgres;
-SQLite's `BEGIN IMMEDIATE` already serializes writers), so concurrent writes cannot both take
-the last slot.
+`max_boards` (the auto-created default board included), a to-do past `max_total_todos`, or an
+**open** to-do past `max_open_todos`. Each field is optional, and `None` limits nothing.
+
+`max_open_todos` bounds the work in flight. An open to-do is one that is neither `done` nor
+`cancelled` and is not archived, so completing, cancelling or archiving frees room, and any move
+that makes a finished to-do open again (`reopen_todo`, `start_todo`, `block_todo`) counts.
+
+`max_total_todos` bounds what the tenant stores. A runtime that serves many accounts needs it,
+because the open count alone leaves storage unbounded: a to-do created `done` or `cancelled`
+(through `create_todo` or a `plan_todos` step) never counts as open, and a create followed by a
+complete frees its slot. So every to-do counts, whatever its status, archived included, and
+since no tool deletes a to-do, nothing frees room: it is a lifetime allowance. `create_todo`
+and `plan_todos` count it; a plan past it is refused whole. When a write passes both counts,
+the refusal names `max_total_todos`, since freeing open room would not help.
+
+`max_details_bytes` bounds one to-do's `details`, in UTF-8 bytes of the stored (trimmed) text,
+on `create_todo`, on every `plan_todos` step, and on `update_todo`. It is checked before the
+write, beside the core's own 64 KiB cap on `details`, which still applies, so a value above
+that cap bounds nothing more.
+
+An idempotent replay adds nothing and is never refused on a count. The count runs under the
+caller's session, so row-level security still applies: where it scopes a session to one
+workspace, a limit holds per workspace. It runs after a transaction-scoped lock on the tenant
+(an advisory lock on Postgres; SQLite's `BEGIN IMMEDIATE` already serializes writers), so
+concurrent writes cannot both take the last slot.
 
 Runtimes register under the `mcp_todos.runtimes` entry-point group, and `TODOS_RUNTIME` names
 the one to use. The generic entry point, `python -m mcp_todos`, refuses to start when
@@ -132,7 +148,7 @@ A failure is a tool result flagged `isError`, with one body:
 | Code | When |
 |---|---|
 | `not_found` | The id or key names nothing the caller can see. An absent record and one outside the caller's scope are indistinguishable |
-| `invalid_request` | An argument is wrong, or the write would pass one of the runtime's limits; nothing was changed. A limit refusal carries `limit` (`max_boards` or `max_open_todos`) in the envelope |
+| `invalid_request` | An argument is wrong, or the write would pass one of the runtime's limits; nothing was changed. A limit refusal carries `limit`, the `Limits` field that refused it (`max_boards`, `max_open_todos`, `max_total_todos` or `max_details_bytes`), in the envelope |
 | `unauthenticated` | The runtime established no identity. Returned before any database session opens |
 | `rate_limited` | The runtime had no capacity for the call and ran nothing; a retry is safe |
 | `internal_error` | Anything else. The message is fixed and generic; the details go to the server log |
