@@ -79,19 +79,27 @@ class Scope:
 
 @dataclass(frozen=True)
 class Limits:
-    """How much a scope's tenant may hold. ``None`` in a field means no limit on that count.
+    """How much a scope's tenant may hold. ``None`` in a field means no limit on it.
 
-    The store enforces them inside the transaction that would exceed one, counting the
+    The store enforces the counts inside the transaction that would exceed one, counting the
     tenant's rows the caller's session can see. Where row-level security scopes a session to
-    one workspace, that is the caller's workspace, so a limit holds per workspace. It counts
-    every board, and every **open** to-do, one
-    whose status is neither ``done`` nor ``cancelled`` and that is not archived. Completing,
-    cancelling or archiving a to-do frees room; any move that makes a finished to-do open
-    again counts.
+    one workspace, that is the caller's workspace, so a limit holds per workspace.
+
+    * ``max_boards`` counts every board.
+    * ``max_open_todos`` counts every **open** to-do, one whose status is neither ``done`` nor
+      ``cancelled`` and that is not archived. Completing, cancelling or archiving a to-do frees
+      room; any move that makes a finished to-do open again counts.
+    * ``max_total_todos`` counts every to-do the tenant holds, whatever its status, archived
+      included. Nothing deletes a to-do, so nothing frees room: it is a lifetime allowance.
+    * ``max_details_bytes`` bounds one to-do's ``details`` in UTF-8 bytes, on every write that
+      sets them. The core's own cap on ``details`` applies as well, so a value above it bounds
+      nothing more.
     """
 
     max_boards: int | None = None
     max_open_todos: int | None = None
+    max_total_todos: int | None = None
+    max_details_bytes: int | None = None
 
 
 class AuthError(Exception):
@@ -139,6 +147,10 @@ class TodoEvent(StrEnum):
     BOARD_LIMIT_REFUSED = "board_limit_refused"
     #: A call was refused because it would exceed :attr:`Limits.max_open_todos`.
     OPEN_TODO_LIMIT_REFUSED = "open_todo_limit_refused"
+    #: A call was refused because it would exceed :attr:`Limits.max_total_todos`.
+    TOTAL_TODO_LIMIT_REFUSED = "total_todo_limit_refused"
+    #: A call was refused because its details exceed :attr:`Limits.max_details_bytes`.
+    DETAILS_LIMIT_REFUSED = "details_limit_refused"
 
 
 class Runtime(Protocol):

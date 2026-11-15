@@ -37,9 +37,11 @@ The load-bearing contracts:
     and every one that takes a board id resolves a board key (:func:`_board_by_ref`,
     :func:`_on_board`), within the caller's workspace.
   * **Limits.** When the runtime gives :class:`~mcp_todos.runtime.Limits`, a write that adds
-    a board, or adds an open to-do (a create, or a move that makes a finished one open
-    again), counts inside its own transaction after the change and raises
-    :class:`LimitExceededError` when the count is over, so the transaction rolls back.
+    a board, adds a to-do, or adds an open to-do (a create, or a move that makes a finished
+    one open again), counts inside its own transaction after the change and raises
+    :class:`LimitExceededError` when the count is over, so the transaction rolls back. A
+    write that sets ``details`` longer than ``max_details_bytes`` is refused before it
+    writes anything.
     The count is of the caller's tenant, under the caller's session (so row-level security
     applies, and a session scoped to one workspace counts that workspace), and runs after :func:`~mcp_todos.db.dialect.serialize_on` for the tenant, so
     two concurrent writes cannot both pass on the same last slot.
@@ -134,15 +136,28 @@ class LimitExceededError(Exception):
 
     Raised inside the write's transaction after the change; leaving the session with it rolls
     the transaction back, so nothing the write did is kept. ``limit`` names the
-    :class:`~mcp_todos.runtime.Limits` field (``max_boards`` or ``max_open_todos``) and
-    ``maximum`` its value.
+    :class:`~mcp_todos.runtime.Limits` field and ``maximum`` its value. ``field`` names the
+    argument a ``max_details_bytes`` refusal is about (``details``, or ``todos[i].details``
+    in a plan).
     """
 
-    def __init__(self, limit: str, maximum: int) -> None:
+    def __init__(self, limit: str, maximum: int, *, field: str = "details") -> None:
         self.limit = limit
         self.maximum = maximum
-        what = "boards" if limit == "max_boards" else "open to-dos"
-        super().__init__(f"This account is at its limit of {maximum} {what}. Nothing was changed.")
+        if limit == "max_total_todos":
+            message = (
+                f"This account has reached its lifetime allowance of {maximum} to-dos. "
+                "Nothing was changed."
+            )
+        elif limit == "max_details_bytes":
+            message = (
+                f"{field} exceeds this account's limit of {maximum} bytes of details per "
+                "to-do. Nothing was changed."
+            )
+        else:
+            what = "boards" if limit == "max_boards" else "open to-dos"
+            message = f"This account is at its limit of {maximum} {what}. Nothing was changed."
+        super().__init__(message)
 
 
 # --------------------------------------------------------------------------- #
@@ -212,6 +227,17 @@ _CAP_BOARD_NAME = 512
 _CAP_DESCRIPTION = 2048
 _CAP_DETAILS = 65536  # 64 KiB markdown detail — the load-bearing cap
 _CAP_PLAN_ITEMS = 100  # max steps in one plan_todos call — bounds the per-item insert loop
+
+
+def _check_details_limit(field: str, details: str | None, limits: Limits | None) -> None:
+    """Raise :class:`LimitExceededError` if ``details`` as stored is longer than
+    ``limits.max_details_bytes`` UTF-8 bytes. Runs before the write, so it changes nothing.
+    """
+    if limits is None or limits.max_details_bytes is None:
+        return
+    stored = _clean(details)
+    if stored is not None and len(stored.encode("utf-8")) > limits.max_details_bytes:
+        raise LimitExceededError("max_details_bytes", limits.max_details_bytes, field=field)
 
 
 def _check_len(field: str, value: str | None, limit: int) -> None:
@@ -572,15 +598,17 @@ async def _enforce_limits(
     limits: Limits | None,
     *,
     boards: bool = False,
+    total_todos: bool = False,
     open_todos: bool = False,
 ) -> None:
     """Raise :class:`LimitExceededError` when, after this transaction's change, the caller's
-    tenant holds more boards (``boards``) or open to-dos (``open_todos``) than ``limits``
-    allow.
+    tenant holds more boards (``boards``), to-dos (``total_todos``) or open to-dos
+    (``open_todos``) than ``limits`` allow.
 
     The count is of the tenant's rows the session can see, so row-level security still
     applies. It runs after the change, so it includes it. The lock comes first, so a concurrent
-    write that took it earlier has committed and is counted too.
+    write that took it earlier has committed and is counted too. The lifetime count is checked
+    before the open count: when both are over, freeing open room would not help.
     """
     if limits is None:
         return
@@ -591,6 +619,14 @@ async def _enforce_limits(
                 "max_boards",
                 limits.max_boards,
                 select(func.count()).select_from(board).where(board.c.tenant_id == ctx.tenant_id),
+            )
+        )
+    if total_todos and limits.max_total_todos is not None:
+        checks.append(
+            (
+                "max_total_todos",
+                limits.max_total_todos,
+                select(func.count()).select_from(todo).where(todo.c.tenant_id == ctx.tenant_id),
             )
         )
     if open_todos and limits.max_open_todos is not None:
@@ -761,8 +797,9 @@ async def create_todo(
     ``blocked`` needs ``blocked_reason`` (:func:`_create_side_effects`).
     A given ``parent_id`` (an id or a key) is validated to be in scope (404 otherwise).
     The to-do takes the board's next number. A new open to-do, or an auto-created default
-    board, counts toward ``limits`` (:class:`LimitExceededError`); a matched replay adds
-    nothing, so it is never refused.
+    board, counts toward ``limits`` (:class:`LimitExceededError`), and so does every new
+    to-do, whatever its status, toward ``max_total_todos``; a matched replay adds nothing, so
+    it is never refused on a count. ``details`` over ``max_details_bytes`` is refused first.
 
     Idempotency: with an ``idempotency_key``, a retry on
     the SAME board converges to one row under ``uq_todo_idem`` via ON CONFLICT (see
@@ -777,6 +814,7 @@ async def create_todo(
     _check_len("status", status, _CAP_SHORT)
     _check_len("idempotency_key", idempotency_key, _CAP_KEY)
     _check_len("source", source, _CAP_SHORT)
+    _check_details_limit("details", details, limits)
     title = title.strip()
     if not title:
         raise ValueError("title must not be empty")
@@ -840,8 +878,13 @@ async def create_todo(
         row, created = inserted, True
     if created:
         await _advance_number(conn, target_board_id, number + 1)
-        if _counts_as_open(resolved_status, None):
-            await _enforce_limits(conn, ctx, limits, open_todos=True)
+        await _enforce_limits(
+            conn,
+            ctx,
+            limits,
+            total_todos=True,
+            open_todos=_counts_as_open(resolved_status, None),
+        )
 
     action = "created" if created else "matched"
     # A matched create changed no row — reflect it in the audit detail so the change log
@@ -885,8 +928,10 @@ async def plan_todos(
     ``sort_order`` is read ONCE (not per item), and a plain insert uses ``RETURNING`` (no
     post-insert re-select), so a large plan stays bounded — no per-item N+1.
 
-    The plan counts toward ``limits`` as a whole: when its new open steps would take the
-    caller past ``max_open_todos``, none of them is kept (:class:`LimitExceededError`).
+    The plan counts toward ``limits`` as a whole: when its new steps would take the caller
+    past ``max_total_todos``, or its new open steps past ``max_open_todos``, none of them is
+    kept (:class:`LimitExceededError`). A step whose ``details`` exceed ``max_details_bytes``
+    refuses the plan before anything is written.
 
     Returns ``(todos, created_count)`` — the created/matched To-do wire models and the
     number that landed as NEW (vs. matched on retry).
@@ -899,6 +944,9 @@ async def plan_todos(
     # Coerce + validate every item up front (uniform typed handling — fixes the due_at
     # string drop and a non-string status at once; rejects a bad item cleanly).
     items = [_parse_plan_item(item, i) for i, item in enumerate(todos)]
+    for i, item in enumerate(items):
+        _check_len(f"todos[{i}].details", item.details, _CAP_DETAILS)
+        _check_details_limit(f"todos[{i}].details", item.details, limits)
     if not items:
         # An empty plan is a no-op — don't auto-create a default board or write an audit
         # row for a plan that creates nothing.
@@ -927,7 +975,6 @@ async def plan_todos(
         if not title:
             raise ValueError(f"todos[{i}].title is required and must be a non-empty string")
         _check_len(f"todos[{i}].title", title, _CAP_TITLE)
-        _check_len(f"todos[{i}].details", item.details, _CAP_DETAILS)
         _check_len(f"todos[{i}].priority", item.priority, _CAP_SHORT)
         _check_len(f"todos[{i}].status", item.status, _CAP_SHORT)
         resolved_status = _normalize_status(item.status)
@@ -995,8 +1042,8 @@ async def plan_todos(
 
     if next_number != first_number:
         await _advance_number(conn, target_board_id, next_number)
-    if opened:
-        await _enforce_limits(conn, ctx, limits, open_todos=True)
+    if created_count:
+        await _enforce_limits(conn, ctx, limits, total_todos=True, open_todos=opened)
 
     # One audit row for the plan call, carrying counts only (no PII): the number of
     # items in the plan and how many were newly created.
@@ -1028,6 +1075,7 @@ async def update_todo(
     assignee: str | None = None,
     due_at: datetime | None = None,
     parent_id: str | None = None,
+    limits: Limits | None = None,
 ) -> Todo:
     """Partial, null-safe field update. Omitted (``None``) fields are unchanged.
 
@@ -1035,11 +1083,13 @@ async def update_todo(
     never their values. **Does NOT touch ``status``** — status moves only through
     the transition verbs. 404 (not 403) if the to-do is out of scope. A new
     ``parent_id`` is validated to be in scope first (404 otherwise). Either may be a key.
+    New ``details`` over ``limits.max_details_bytes`` are refused (:class:`LimitExceededError`).
     """
     _check_len("title", title, _CAP_TITLE)
     _check_len("details", details, _CAP_DETAILS)
     _check_len("priority", priority, _CAP_SHORT)
     _check_len("assignee", assignee, _CAP_SHORT)
+    _check_details_limit("details", details, limits)
     todo_id = (await _resolve_todo(conn, ctx, todo_id))["id"]  # 404 if out of scope
     if parent_id is not None:
         # Validate the edge target in scope (404 otherwise), then guard the trivial cycle
