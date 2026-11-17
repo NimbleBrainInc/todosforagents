@@ -627,7 +627,7 @@ async def create_todo(
         "todo": dump(todo_obj),
         "action": action,
         "next_step": (
-            f"Start it with start_todo(todo_id={todo_obj.id!r}), or pull the next item with "
+            f"Start it with start_todo(todo_id={todo_obj.key!r}), or pull the next item with "
             "get_next_todo()."
         ),
     }
@@ -764,7 +764,7 @@ async def update_todo(
     return {
         "todo": dump(todo_obj),
         "next_step": (
-            f"Review it with get_todo(todo_id={todo_obj.id!r}), or move it with "
+            f"Review it with get_todo(todo_id={todo_obj.key!r}), or move it with "
             "start_todo / complete_todo."
         ),
     }
@@ -806,7 +806,7 @@ async def start_todo(todo_id: str, ctx: Context | None = None) -> dict:
         "todo": dump(todo_obj),
         "previous_status": previous_status,
         "next_step": (
-            f"Complete it with complete_todo(todo_id={todo_obj.id!r}) when done, or block it "
+            f"Complete it with complete_todo(todo_id={todo_obj.key!r}) when done, or block it "
             "with block_todo if you hit a blocker."
         ),
     }
@@ -878,7 +878,7 @@ async def block_todo(todo_id: str, reason: str, ctx: Context | None = None) -> d
         "todo": dump(todo_obj),
         "previous_status": previous_status,
         "next_step": (
-            f"Unblock it with start_todo(todo_id={todo_obj.id!r}) once cleared, or move on with "
+            f"Unblock it with start_todo(todo_id={todo_obj.key!r}) once cleared, or move on with "
             "get_next_todo()."
         ),
     }
@@ -914,7 +914,7 @@ async def reopen_todo(todo_id: str, ctx: Context | None = None) -> dict:
     return {
         "todo": dump(todo_obj),
         "previous_status": previous_status,
-        "next_step": f"Start it again with start_todo(todo_id={todo_obj.id!r}).",
+        "next_step": f"Start it again with start_todo(todo_id={todo_obj.key!r}).",
     }
 
 
@@ -1143,8 +1143,8 @@ async def get_todo(todo_id: str, ctx: Context | None = None) -> dict:
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="get_todo")
     next_step = (
-        f"Move it with start_todo(todo_id={todo_obj.id!r}), or update its fields with "
-        f"update_todo(todo_id={todo_obj.id!r}, ...)."
+        f"Move it with start_todo(todo_id={todo_obj.key!r}), or update its fields with "
+        f"update_todo(todo_id={todo_obj.key!r}, ...)."
     )
     if steps:
         next_step = (
@@ -1199,7 +1199,7 @@ async def get_next_todo(board_id: str | None = None, ctx: Context | None = None)
         }
     return {
         "todo": dump(todo_obj),
-        "next_step": f"Start it with start_todo(todo_id={todo_obj.id!r}).",
+        "next_step": f"Start it with start_todo(todo_id={todo_obj.key!r}).",
     }
 
 
@@ -1344,7 +1344,7 @@ async def create_board(
         "next_step": (
             f"The board's key is {board_obj.key}: its to-dos will be {board_obj.key}-1, "
             f"{board_obj.key}-2, ... Tell the person, then add to-dos with "
-            f"create_todo(board_id={board_obj.id!r}, ...)."
+            f"create_todo(board_id={board_obj.key!r}, ...)."
         ),
     }
 
@@ -1390,7 +1390,7 @@ async def update_board(
     await announce_resource_list_changed(ctx)
     return {
         "board": dump(board_obj),
-        "next_step": f"Review the board with get_board_summary(board_id={board_obj.id!r}).",
+        "next_step": f"Review the board with get_board_summary(board_id={board_obj.key!r}).",
     }
 
 

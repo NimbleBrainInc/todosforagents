@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "@nimblebraininc/todosforagents",
   "display_name": "Todos for Agents",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "To-do boards for AI agents, kept in one SQLite file on your own machine. No account, no cloud service.",
   "author": {
     "name": "NimbleBrain Inc",

@@ -448,7 +448,7 @@ async def test_a_refused_create_board_is_invalid_request_with_the_limit(
     err = error_of(await server.create_board(name="Second"))
     assert err["code"] == "invalid_request"
     assert err["limit"] == "max_boards"
-    assert err["message"] == "This account is at its limit of 1 boards. Nothing was changed."
+    assert err["message"] == "This account is at its limit of 1 board. Nothing was changed."
     # It names the board there is, and how to make it fit: rename it, separate with labels.
     assert '"To-dos" (TODO)' in err["next_step"]
     assert 'board_id="TODO"' in err["next_step"]
@@ -806,3 +806,36 @@ async def test_a_refused_details_write_is_invalid_request_with_the_limit(
     _assert_in_product(err["next_step"])
     assert TodoEvent.DETAILS_LIMIT_REFUSED in lifetime
     assert await _denials() == [tool]
+
+
+@pytest.mark.parametrize(
+    ("limit", "maximum", "expected"),
+    [
+        ("max_boards", 1, "This account is at its limit of 1 board. Nothing was changed."),
+        ("max_boards", 3, "This account is at its limit of 3 boards. Nothing was changed."),
+        ("max_open_todos", 1, "This account is at its limit of 1 open to-do. Nothing was changed."),
+        (
+            "max_open_todos",
+            25,
+            "This account is at its limit of 25 open to-dos. Nothing was changed.",
+        ),
+        (
+            "max_total_todos",
+            1,
+            "This account has reached its lifetime allowance of 1 to-do. Nothing was changed.",
+        ),
+        (
+            "max_total_todos",
+            500,
+            "This account has reached its lifetime allowance of 500 to-dos. Nothing was changed.",
+        ),
+    ],
+)
+def test_a_limit_message_counts_in_the_right_number(
+    limit: str, maximum: int, expected: str
+) -> None:
+    assert str(LimitExceededError(limit, maximum)) == expected
+
+
+def test_a_details_limit_of_one_byte_is_singular() -> None:
+    assert "limit of 1 byte of details" in str(LimitExceededError("max_details_bytes", 1))

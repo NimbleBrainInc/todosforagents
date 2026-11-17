@@ -313,6 +313,27 @@ async def test_get_next_todo_tool(headers):
 
 
 @pytest.mark.asyncio
+async def test_next_steps_name_keys_not_ids(headers):
+    """A next_step names a to-do or board by its key, the handle the person sees (MAG-3)."""
+    created = await server.create_todo(title="Write the brief")
+    todo_key, todo_id = created["todo"]["key"], created["todo"]["id"]
+    results = [
+        await server.get_next_todo(),
+        await server.start_todo(todo_id=todo_key),
+        await server.block_todo(todo_id=todo_key, reason="waiting on review"),
+        await server.reopen_todo(todo_id=todo_key),
+        await server.update_todo(todo_id=todo_key, title="Write the brief, v2"),
+        await server.create_board(name="Second board"),
+    ]
+    for res in results:
+        step = res["next_step"]
+        assert todo_id not in step and "td_" not in step and "bd_" not in step, step
+    assert f"todo_id={todo_key!r}" in results[0]["next_step"]
+    second = results[-1]
+    assert f"board_id={second['board']['key']!r}" in second["next_step"]
+
+
+@pytest.mark.asyncio
 async def test_get_board_summary_tool(headers):
     """get_board_summary returns {board, lanes, totals, attention, next_step}."""
     await server.create_todo(title="One")
