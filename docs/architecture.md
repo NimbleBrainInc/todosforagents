@@ -186,7 +186,7 @@ open board refreshes; a read never does.
 ## The surface is frozen
 
 `tests/golden/surface.json` holds what a client sees: every tool with its schemas and
-annotations, the resources and templates, the capabilities, the instructions, and a digest of
-the skill. The in-process server and a separate `todosforagents` process over stdio must both
-match it. A deliberate change edits the golden file in the same pull request, so review sees
+annotations, every prompt with its arguments, the resources and templates, the capabilities,
+the instructions, and a digest of the skill. The in-process server and a separate
+`todosforagents` process over stdio must both match it. A deliberate change edits the golden file in the same pull request, so review sees
 the diff.

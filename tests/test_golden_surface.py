@@ -1,7 +1,8 @@
 """Golden: the MCP surface this server advertises.
 
 Every tool (name, title, description, input and output schemas, annotations, meta), every
-resource and resource template (URI, name, description, MIME type, meta), the server's
+prompt (name, title, description, arguments), every resource and resource template (URI,
+name, description, MIME type, meta), the server's
 capabilities and instructions, and a digest of the skill it serves. This is what agents and
 hosts rely on, and the parity target for every runtime: a runtime may change where identity
 comes from, never what a client sees.
@@ -52,6 +53,7 @@ async def surface() -> dict[str, Any]:
             (_dump(t) for t in await client.list_resource_templates()),
             key=lambda t: t["uriTemplate"],
         )
+        prompts = sorted((_dump(p) for p in await client.list_prompts()), key=lambda p: p["name"])
         skill = await client.read_resource("skill://todos/SKILL.md")
         skill_text = "".join(getattr(part, "text", "") for part in skill)
         capabilities = _dump(client.server_capabilities) if client.server_capabilities else {}
@@ -59,6 +61,7 @@ async def surface() -> dict[str, Any]:
         "instructions": server.mcp.instructions,
         "capabilities": capabilities,
         "tools": tools,
+        "prompts": prompts,
         "resources": resources,
         "resource_templates": templates,
         "skill_sha256": hashlib.sha256(skill_text.encode()).hexdigest(),

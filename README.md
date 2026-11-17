@@ -69,6 +69,15 @@ the five status verbs. Every result carries a `next_step` telling the agent what
 it, and the server also serves a skill (`skill://todos/SKILL.md`) with the rules for choosing
 a tool.
 
+## Prompts
+
+| Prompt | What it does |
+|---|---|
+| `get_started` | Start your list, or pick it up. With `focus` (what you are working on), the agent proposes 3 to 5 to-dos for it; without, it checks your board first |
+
+Hosts that surface prompts, as slash commands for example, offer it as "Get started with your
+to-dos".
+
 ## Keys
 
 Every board has a short key, and every to-do a key made of its board's key and its number

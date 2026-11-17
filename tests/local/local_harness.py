@@ -120,12 +120,14 @@ async def surface(client: Client) -> dict[str, Any]:
         (_dump(t) for t in await client.list_resource_templates()),
         key=lambda t: t["uriTemplate"],
     )
+    prompts = sorted((_dump(p) for p in await client.list_prompts()), key=lambda p: p["name"])
     skill = await client.read_resource("skill://todos/SKILL.md")
     skill_text = "".join(getattr(part, "text", "") for part in skill)
     return {
         "instructions": client.instructions,
         "capabilities": _dump(client.server_capabilities) if client.server_capabilities else {},
         "tools": tools,
+        "prompts": prompts,
         "resources": resources,
         "resource_templates": templates,
         "skill_sha256": hashlib.sha256(skill_text.encode()).hexdigest(),
