@@ -313,6 +313,42 @@ async def test_get_next_todo_tool(headers):
 
 
 @pytest.mark.asyncio
+async def test_next_steps_name_keys_not_ids(headers):
+    """Every next_step that names a to-do or board carries its key (MAG-3), never its id."""
+    created = await server.create_todo(title="Write the brief")
+    key, todo_id = created["todo"]["key"], created["todo"]["id"]
+    expected = [
+        (created, f"start_todo(todo_id={key!r})"),
+        (await server.get_next_todo(), f"start_todo(todo_id={key!r})"),
+        (await server.get_todo(todo_id=key), f"update_todo(todo_id={key!r}, ...)"),
+        (await server.start_todo(todo_id=key), f"complete_todo(todo_id={key!r})"),
+        (
+            await server.block_todo(todo_id=key, reason="waiting on review"),
+            f"start_todo(todo_id={key!r})",
+        ),
+        (await server.reopen_todo(todo_id=key), f"start_todo(todo_id={key!r})"),
+        (
+            await server.update_todo(todo_id=key, title="Write the brief, v2"),
+            f"get_todo(todo_id={key!r})",
+        ),
+    ]
+    board = await server.create_board(name="Second board")
+    board_key, board_id = board["board"]["key"], board["board"]["id"]
+    expected += [
+        (board, f"create_todo(board_id={board_key!r}, ...)"),
+        (
+            await server.update_board(board_id=board_key, name="Second board, renamed"),
+            f"get_board_summary(board_id={board_key!r})",
+        ),
+    ]
+    for res, call in expected:
+        step = res["next_step"]
+        assert call in step, step
+        assert todo_id not in step and board_id not in step, step
+        assert "td_" not in step and "bd_" not in step, step
+
+
+@pytest.mark.asyncio
 async def test_get_board_summary_tool(headers):
     """get_board_summary returns {board, lanes, totals, attention, next_step}."""
     await server.create_todo(title="One")

@@ -133,6 +133,11 @@ class BoardNotFoundError(LookupError):
     """A board id is not visible in this (tenant, workspace) — 404, not 403."""
 
 
+def _count_of(n: int, noun: str) -> str:
+    """``n`` and ``noun``, plural unless ``n`` is 1: ``1 board``, ``25 open to-dos``."""
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
 class LimitExceededError(Exception):
     """The write would take the caller past one of its :class:`~mcp_todos.runtime.Limits`.
 
@@ -148,17 +153,19 @@ class LimitExceededError(Exception):
         self.maximum = maximum
         if limit == "max_total_todos":
             message = (
-                f"This account has reached its lifetime allowance of {maximum} to-dos. "
-                "Nothing was changed."
+                f"This account has reached its lifetime allowance of "
+                f"{_count_of(maximum, 'to-do')}. Nothing was changed."
             )
         elif limit == "max_details_bytes":
             message = (
-                f"{field} exceeds this account's limit of {maximum} bytes of details per "
-                "to-do. Nothing was changed."
+                f"{field} exceeds this account's limit of {_count_of(maximum, 'byte')} of "
+                "details per to-do. Nothing was changed."
             )
         else:
-            what = "boards" if limit == "max_boards" else "open to-dos"
-            message = f"This account is at its limit of {maximum} {what}. Nothing was changed."
+            what = "board" if limit == "max_boards" else "open to-do"
+            message = (
+                f"This account is at its limit of {_count_of(maximum, what)}. Nothing was changed."
+            )
         super().__init__(message)
 
 
