@@ -57,6 +57,7 @@ from nimblebrain_server_sdk import (
 )
 from nimblebrain_server_sdk.errors import rate_limited_tool_error
 
+from mcp_todos import prompts
 from mcp_todos.db import store
 from mcp_todos.db.store import (
     BoardNotFoundError,
@@ -1392,6 +1393,19 @@ async def update_board(
         "board": dump(board_obj),
         "next_step": f"Review the board with get_board_summary(board_id={board_obj.key!r}).",
     }
+
+
+# --------------------------------------------------------------------------- #
+# Prompts                                                                       #
+# --------------------------------------------------------------------------- #
+
+mcp.prompt(
+    title="Get started with your to-dos",
+    description=(
+        "Start your to-do list, or pick it up: plan your first to-dos, or see what is in "
+        "progress and what is next."
+    ),
+)(prompts.get_started)
 
 
 # --------------------------------------------------------------------------- #

@@ -39,7 +39,7 @@ diff and commit message for these before pushing.
 
 | File | Holds |
 |---|---|
-| `surface.json` | Every tool with its schemas and annotations, the resources and templates, the capabilities, the instructions, and a digest of the skill, as the local runtime serves them. The UI build hash in `ui://todos/main/<build>` is normalized to `<build>` |
+| `surface.json` | Every tool with its schemas and annotations, every prompt with its arguments, the resources and templates, the capabilities, the instructions, and a digest of the skill, as the local runtime serves them. The UI build hash in `ui://todos/main/<build>` is normalized to `<build>` |
 | `paging.txt` | The cursors agents already hold, and the SQL each resumes with |
 
 A deliberate change edits the golden file by hand in the same pull request, so review sees the

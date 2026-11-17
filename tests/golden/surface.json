@@ -17,6 +17,25 @@
     }
   },
   "instructions": "A to-do's status moves only through the transition verbs; update_todo cannot change it. start_todo when work begins, complete_todo when it is finished, cancel_todo when it will not be done, block_todo with a reason when it is waiting on something, reopen_todo to put it back to open. archive_todo only hides a to-do and leaves its status as it is. A to-do's key (MAG-3) and a board's key (MAG) work anywhere an id does. Hosts that load skills can read skill://todos/SKILL.md for more.",
+  "prompts": [
+    {
+      "_meta": {
+        "fastmcp": {
+          "tags": []
+        }
+      },
+      "arguments": [
+        {
+          "description": "What you are working on. Leave it empty to start from your board.",
+          "name": "focus",
+          "required": false
+        }
+      ],
+      "description": "Start your to-do list, or pick it up: plan your first to-dos, or see what is in progress and what is next.",
+      "name": "get_started",
+      "title": "Get started with your to-dos"
+    }
+  ],
   "resource_templates": [
     {
       "_meta": {
