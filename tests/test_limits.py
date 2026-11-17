@@ -292,6 +292,68 @@ async def test_postgres_serializes_limit_checks_on_an_advisory_lock() -> None:
     assert len(executed) == 1
 
 
+def _record_locks(monkeypatch: pytest.MonkeyPatch, on_default_lock: Any = None) -> list[str]:
+    """Record the lock keys the store takes, in order. ``on_default_lock(conn)`` runs once, as
+    the first default-board lock is granted, standing in for a write that committed while this
+    one waited (on Postgres, READ COMMITTED shows it to every statement after the lock)."""
+    taken: list[str] = []
+    pending = [on_default_lock] if on_default_lock is not None else []
+
+    async def recording(conn: Any, key: str) -> None:
+        taken.append(key)
+        if pending and key.startswith("todos:default-board:"):
+            await pending.pop()(conn)
+
+    monkeypatch.setattr(store, "serialize_on", recording)
+    return taken
+
+
+DEFAULT_LOCK = f"todos:default-board:{CTX.tenant_id}:{CTX.workspace_id}"
+LIMITS_LOCK = f"todos:limits:{CTX.tenant_id}"
+
+
+@pytest.mark.parametrize("first_write", ["create_board", "create_todo"])
+async def test_setting_the_default_board_locks_the_workspace_before_the_limits(
+    app_engine, monkeypatch: pytest.MonkeyPatch, first_write: str
+) -> None:
+    # SQLite serializes every writer anyway, so this pins the order Postgres relies on: the
+    # workspace's default-board lock, then the tenant's limits lock, never the reverse.
+    taken = _record_locks(monkeypatch)
+    async with session_for(CTX) as conn:
+        if first_write == "create_board":
+            await store.create_board(conn, CTX, name="Launch", limits=BOARDS_1)
+        else:
+            await store.create_todo(conn, CTX, title="first", limits=BOARDS_1)
+    assert taken == [DEFAULT_LOCK, LIMITS_LOCK]
+
+
+async def test_a_workspace_with_a_default_board_takes_no_default_lock(
+    app_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _create("makes the default board", limits=None)
+    taken = _record_locks(monkeypatch)
+    async with session_for(CTX) as conn:
+        await store.create_board(conn, CTX, name="Second", limits=Limits(max_boards=2))
+    assert taken == [LIMITS_LOCK]
+
+
+async def test_create_board_decides_the_default_after_the_lock(
+    app_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A first board another write made while this one waited for the lock is the default; a
+    # decision taken before the lock would make a second default and break uq_board_default.
+    async def concurrent_first_use(conn: Any) -> None:
+        await store._resolve_default_board(conn, CTX)
+
+    _record_locks(monkeypatch, concurrent_first_use)
+    async with session_for(CTX) as conn:
+        made = await store.create_board(conn, CTX, name="Launch")
+    assert made.is_default is False
+    async with session_for(CTX) as conn:
+        defaults = (await conn.execute(select(board).where(board.c.is_default.is_(True)))).all()
+    assert [row.key for row in defaults] == ["TODO"]
+
+
 async def test_a_move_reads_the_status_it_counts_on_under_a_row_lock(app_engine) -> None:
     # Under READ COMMITTED, an unlocked read could see a to-do still open after a concurrent
     # complete freed its slot for another create; the move would then skip the count. The read
