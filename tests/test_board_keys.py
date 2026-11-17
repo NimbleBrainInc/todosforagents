@@ -105,7 +105,8 @@ async def test_numbers_are_sequential_per_board(app_engine) -> None:
         (await _create(ctx, "c", board_id=mag.id)).key,
         (await _create(ctx, "d")).key,
     ]
-    assert keys == ["MAG-1", "LP-1", "MAG-2", "TODO-1"]
+    # The first board made is the default, so a to-do that names no board lands on it.
+    assert keys == ["MAG-1", "LP-1", "MAG-2", "MAG-3"]
 
 
 async def test_archiving_frees_no_number(app_engine) -> None:

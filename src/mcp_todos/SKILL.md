@@ -19,6 +19,13 @@ metadata:
 
 Every tool returns a `next_step`; follow it.
 
+## First use
+
+With no to-dos yet, ask what the person is working on and lay out a short plan, 3 to 5
+concrete to-dos, with `plan_todos`; it puts them on the default board, made if there is none.
+One board is usually enough: separate areas with labels rather than more boards. Tell the
+person the keys the to-dos got.
+
 ## Status moves only through the verb that names what happened
 
 `update_todo` has no status. The five states (`open · in_progress · blocked · done ·

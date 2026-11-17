@@ -10,7 +10,8 @@ lifetime total counts every to-do, whatever its status, archived included; every
 plan counts toward it. The details limit is checked before a create, plan or update writes.
 
 At the tool boundary a refusal is the ``invalid_request`` error with a ``limit`` field, and its
-``next_step`` says how to free room or where there are no limits. The tool surface is unchanged.
+``next_step`` says what to do inside the account: free room, or use the board it has. The tool
+surface is unchanged.
 """
 
 from __future__ import annotations
@@ -26,9 +27,10 @@ from sqlalchemy.dialects import postgresql
 from tool_errors import error_of
 
 from mcp_todos import server
-from mcp_todos.db import store, todo_activity
+from mcp_todos.db import board, store, todo_activity
 from mcp_todos.db.dialect import serialize_on
 from mcp_todos.db.store import LimitExceededError
+from mcp_todos.models import PlanItem
 from mcp_todos.runtime import Limits, Scope, TodoEvent
 from mcp_todos_local.runtime import LOCAL_SCOPE
 
@@ -199,17 +201,29 @@ async def test_a_board_past_the_limit_is_refused(app_engine) -> None:
         assert [b.name for b in await store.list_boards(conn, CTX)] == ["Launch"]
 
 
-async def test_the_default_board_counts_toward_the_board_limit(app_engine) -> None:
+async def test_a_board_made_first_takes_the_to_dos_that_name_no_board(app_engine) -> None:
+    # Board first, then a to-do with no board_id: the board is the default, so no second
+    # board is needed and the one-board limit is not reached.
     async with session_for(CTX) as conn:
         launch = await store.create_board(conn, CTX, name="Launch", limits=BOARDS_1)
-    # No board named: the default board would be a second board.
-    with pytest.raises(LimitExceededError) as refused:
-        await _create("one", limits=BOARDS_1)
-    assert refused.value.limit == "max_boards"
+    made = await _create("one", limits=BOARDS_1)
+    assert made.board_id == launch.id
+    assert made.key == f"{launch.key}-1"
     async with session_for(CTX) as conn:
         assert [b.name for b in await store.list_boards(conn, CTX)] == ["Launch"]
-    # Naming the board that exists works.
-    await _create("one", limits=BOARDS_1, board_id=launch.key)
+
+
+async def test_the_default_board_counts_toward_the_board_limit(app_engine) -> None:
+    # Several boards and none of them the default (made before the first board became it):
+    # a to-do that names no board would need a new default board, a third board.
+    async with session_for(CTX) as conn:
+        await store.create_board(conn, CTX, name="Launch")
+        await store.create_board(conn, CTX, name="Hiring")
+        await conn.execute(board.update().values(is_default=False))
+    with pytest.raises(LimitExceededError) as refused:
+        await _create("one", limits=Limits(max_boards=2))
+    assert refused.value.limit == "max_boards"
+    assert sorted(await _boards()) == ["Hiring", "Launch"]
 
 
 async def test_an_existing_default_board_is_reused_at_the_board_limit(app_engine) -> None:
@@ -339,7 +353,7 @@ async def test_a_refused_create_todo_is_invalid_request_with_the_limit(
     assert err["retryable"] is False
     assert "2 open to-dos" in err["message"]
     assert "complete, cancel or archive" in err["next_step"].lower()
-    assert "locally" in err["next_step"]
+    _assert_in_product(err["next_step"])
     assert TodoEvent.OPEN_TODO_LIMIT_REFUSED in limited
     assert await _denials() == ["create"]
 
@@ -357,16 +371,74 @@ async def test_a_refused_reopen_is_invalid_request_with_the_limit(
     assert plan["limit"] == "max_open_todos"
 
 
+def _assert_in_product(next_step: str) -> None:
+    """A refusal's next_step names steps inside this account, never another way to run it."""
+    lowered = next_step.lower()
+    for elsewhere in ("uvx", "locally", "install", "no limits"):
+        assert elsewhere not in lowered, next_step
+
+
 async def test_a_refused_create_board_is_invalid_request_with_the_limit(
     app_engine, limited: list[TodoEvent]
 ) -> None:
-    await server.create_todo(title="one")  # creates the default board
+    # A to-do with no board first, then a board: the implicit default board took the one slot.
+    await server.create_todo(title="one")
     err = error_of(await server.create_board(name="Second"))
     assert err["code"] == "invalid_request"
     assert err["limit"] == "max_boards"
-    assert "list_boards" in err["next_step"]
-    assert "locally" in err["next_step"]
+    assert err["message"] == "This account is at its limit of 1 boards. Nothing was changed."
+    # It names the board there is, and how to make it fit: rename it, separate with labels.
+    assert '"To-dos" (TODO)' in err["next_step"]
+    assert 'board_id="TODO"' in err["next_step"]
+    assert "update_board" in err["next_step"]
+    assert "labels" in err["next_step"]
+    _assert_in_product(err["next_step"])
     assert TodoEvent.BOARD_LIMIT_REFUSED in limited
+
+
+async def test_a_refused_create_board_names_every_board_there_is(
+    app_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RUNTIME, "limits", lambda scope: Limits(max_boards=2))
+    await server.create_board(name="Launch plan", key="LP")
+    await server.create_board(name="Hiring", key="HR")
+    err = error_of(await server.create_board(name="Third"))
+    assert err["limit"] == "max_boards"
+    assert '"Launch plan" (LP)' in err["next_step"]
+    assert '"Hiring" (HR)' in err["next_step"]
+    assert "labels" in err["next_step"]
+    _assert_in_product(err["next_step"])
+
+
+async def test_board_first_then_a_to_do_with_no_board_lands_on_it_at_the_limit(
+    app_engine, limited: list[TodoEvent]
+) -> None:
+    board_made = await server.create_board(name="Launch plan")
+    key = board_made["board"]["key"]
+    made = await server.create_todo(title="one")
+    assert made["todo"]["board_id"] == board_made["board"]["id"]
+    assert made["todo"]["key"] == f"{key}-1"
+    planned = await server.plan_todos(todos=[PlanItem(title="two")])
+    assert planned["todos"][0]["board_id"] == board_made["board"]["id"]
+    assert TodoEvent.BOARD_LIMIT_REFUSED not in limited
+
+
+async def test_list_boards_at_the_board_limit_does_not_suggest_create_board(
+    app_engine, limited: list[TodoEvent]
+) -> None:
+    await server.create_board(name="Launch plan", key="LP")
+    listing = await server.list_boards()
+    assert "create_board" not in listing["next_step"]
+    assert '"Launch plan" (LP)' in listing["next_step"]
+    assert "labels" in listing["next_step"]
+
+
+async def test_list_boards_under_the_board_limit_suggests_create_board(
+    app_engine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(RUNTIME, "limits", lambda scope: Limits(max_boards=2))
+    await server.create_board(name="Launch plan", key="LP")
+    assert "create_board" in (await server.list_boards())["next_step"]
 
 
 # --------------------------------------------------------------------------- #
@@ -633,8 +705,8 @@ async def test_a_refused_create_past_the_total_is_invalid_request_with_the_limit
         "next_step": err["next_step"],
     }
     assert "lifetime allowance" in err["next_step"]
-    assert "uvx todosforagents" in err["next_step"]
-    assert "export" in err["next_step"]
+    assert "list_todos" in err["next_step"] and "get_todo" in err["next_step"]
+    _assert_in_product(err["next_step"])
     assert TodoEvent.TOTAL_TODO_LIMIT_REFUSED in lifetime
     assert TodoEvent.OPEN_TODO_LIMIT_REFUSED not in lifetime
     assert await _denials() == ["create"]
@@ -669,5 +741,6 @@ async def test_a_refused_details_write_is_invalid_request_with_the_limit(
         "next_step": err["next_step"],
     }
     assert "Shorten the details" in err["next_step"]
+    _assert_in_product(err["next_step"])
     assert TodoEvent.DETAILS_LIMIT_REFUSED in lifetime
     assert await _denials() == [tool]

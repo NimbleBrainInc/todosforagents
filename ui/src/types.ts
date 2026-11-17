@@ -99,7 +99,8 @@ export interface Lane {
 }
 
 export interface BoardSummaryResult {
-  board: Board;
+  /** `null` when the workspace has no board yet. */
+  board: Board | null;
   lanes: Lane[];
   totals: { active: number; overdue: number; stalled: number; blocked: number };
   attention: { overdue: number; stalled: number; blocked: number };

@@ -45,11 +45,12 @@ The load-bearing contracts:
     The count is of the caller's tenant, under the caller's session (so row-level security
     applies, and a session scoped to one workspace counts that workspace), and runs after :func:`~mcp_todos.db.dialect.serialize_on` for the tenant, so
     two concurrent writes cannot both pass on the same last slot.
-  * **Default board (zero-ceremony start).** A workspace gets a default
-    board auto-created on first ``create_todo``/``plan_todos`` with no ``board_id``.
-    Exactly one default per workspace, enforced by the partial unique index
-    ``uq_board_default``; the auto-create handles that race the same ON CONFLICT
-    DO NOTHING + re-select way. See :func:`_resolve_default_board`.
+  * **Default board (zero-ceremony start).** ``create_todo``/``plan_todos`` with no
+    ``board_id`` land on the workspace's default board: the first board ``create_board``
+    made, or one auto-created on first use when there is no board. Exactly one default per
+    workspace, enforced by the partial unique index ``uq_board_default``; every write that
+    sets one decides under a lock, and the auto-create keeps the ON CONFLICT DO NOTHING +
+    re-select convergence. See :func:`_resolve_default_board`.
 
 Reads (``list_todos`` / ``get_todo`` / ``get_next_todo`` / ``get_board_summary``) are
 side-effect free — they return wire models, emit a ``todos_access`` log line (never
@@ -106,6 +107,7 @@ __all__ = [
     "get_board_summary",
     "get_next_todo",
     "get_todo",
+    "has_todos",
     "list_boards",
     "list_todos",
     "plan_todos",
@@ -651,24 +653,64 @@ async def _enforce_limits(
             raise LimitExceededError(name, maximum)
 
 
+#: Prefix of the lock every write that may set a workspace's default board serializes on,
+#: keyed by tenant and workspace. It is taken before :data:`_LIMITS_LOCK`, never after.
+_DEFAULT_LOCK = "todos:default-board:"
+
+
+async def _implicit_board(conn: AsyncConnection) -> RowMapping | None:
+    """The board a call that names none means: the default board, else the only board.
+
+    A workspace whose boards were all made by ``create_board`` before a first board became the
+    default has boards but no default. When it has exactly one, that board is the one the
+    person means. With none, or with several and no default, there is no implicit board.
+    """
+    default = await _one(conn, select(board).where(board.c.is_default.is_(True)))
+    if default is not None:
+        return default
+    rows = await _all(conn, select(board).limit(2))
+    return rows[0] if len(rows) == 1 else None
+
+
+async def _settle_default(conn: AsyncConnection, ctx: Principal) -> RowMapping | None:
+    """Make the implicit board the default when it is not yet, and return it (or ``None``).
+
+    Runs under :data:`_DEFAULT_LOCK`, so two writes cannot both decide the workspace has no
+    default and both set one, which ``uq_board_default`` would refuse. The lock is taken only
+    when no default exists, so a workspace that has one pays a single SELECT.
+    """
+    row = await _one(conn, select(board).where(board.c.is_default.is_(True)))
+    if row is not None:
+        return row
+    await serialize_on(conn, f"{_DEFAULT_LOCK}{ctx.tenant_id}:{ctx.workspace_id}")
+    row = await _implicit_board(conn)
+    if row is None or row["is_default"]:
+        return row
+    await conn.execute(
+        board.update().where(board.c.id == row["id"]).values(is_default=True, updated_at=_now())
+    )
+    return await _board_row(conn, row["id"])
+
+
 async def _resolve_default_board(
     conn: AsyncConnection, ctx: Principal, limits: Limits | None = None
 ) -> RowMapping:
-    """Return the workspace's default board, auto-creating it on first use.
+    """Return the workspace's default board, making one on first use.
 
-    Zero-ceremony start: ``create_todo`` / ``plan_todos`` with no ``board_id`` land
-    on this board, which is created on first use. The default board is the one row
-    with ``is_default = true`` in scope, kept unique by the partial unique index
-    ``uq_board_default`` (exactly one default per workspace).
+    Zero-ceremony start: ``create_todo`` / ``plan_todos`` with no ``board_id`` land on the
+    default board, the one row with ``is_default = true`` in scope, kept unique by the partial
+    unique index ``uq_board_default`` (exactly one default per workspace). The first board
+    ``create_board`` makes becomes the default, so a person who made a board first finds their
+    to-dos on it. A workspace with exactly one board and no default (made before that rule) has
+    that board marked default here (:func:`_settle_default`): it is the board the person
+    means, and marking it keeps it the default once a second board exists.
 
-    Race-safe like the to-do upsert: a concurrent first-use from two requests would
-    both see "no default" and both try to insert, colliding on ``uq_board_default``.
-    So we ``INSERT ... ON CONFLICT DO NOTHING`` the default board, then re-select
-    the (now-guaranteed-present) default — the loser converges on the winner's row
-    rather than raising. The board is born with the four canonical lanes
-    (:data:`_DEFAULT_COLUMNS`). Creating it counts toward ``limits.max_boards``.
+    With no board at all, the default board is created with the four canonical lanes
+    (:data:`_DEFAULT_COLUMNS`), under the same lock, and counts toward ``limits.max_boards``.
+    The insert keeps ``ON CONFLICT DO NOTHING`` and re-selects, so a write that set a default
+    without the lock still converges on one row.
     """
-    existing = await _one(conn, select(board).where(board.c.is_default.is_(True)))
+    existing = await _settle_default(conn, ctx)
     if existing is not None:
         return existing
 
@@ -1551,16 +1593,28 @@ async def get_next_todo(
     return Todo.from_row(row) if row is not None else None
 
 
+async def has_todos(conn: AsyncConnection, ctx: Principal) -> bool:
+    """Whether the workspace holds any to-do at all, archived and finished ones included.
+
+    Tells an empty workspace (onboard the person) from one whose work is all done, blocked or
+    in progress. A read-only probe beside :func:`get_next_todo`, which logs the access.
+    """
+    del ctx  # the session's scope is the workspace's
+    return await _one(conn, select(todo.c.id).limit(1)) is not None
+
+
 async def get_board_summary(
     conn: AsyncConnection, ctx: Principal, *, board_id: str | None = None
-) -> tuple[Board, list[dict[str, Any]], dict[str, int], dict[str, int]]:
+) -> tuple[Board | None, list[dict[str, Any]], dict[str, int], dict[str, int]]:
     """Read-only board health: per-lane counts + WIP, totals, and what needs attention.
 
     Resolves the board READ-ONLY: a given ``board_id`` (an id or a key) loads via
-    :func:`_board_by_ref` (404 if out of scope); ``None`` resolves the workspace default board via an
-    ``is_default`` SELECT and raises :class:`BoardNotFoundError` if none exists —
-    a read NEVER auto-creates a board (side-effect free; contrast
-    :func:`_resolve_default_board`, the WRITE path).
+    :func:`_board_by_ref` (404 if out of scope); ``None`` resolves the implicit board
+    (:func:`_implicit_board`: the default, else the only board). A workspace with no board at
+    all has nothing to summarize yet, which is not an error: the board is ``None``, with no
+    lanes and zero counts. Several boards and no default raise :class:`BoardNotFoundError`,
+    since none of them is the one meant. A read NEVER creates or marks a board (side-effect
+    free; contrast :func:`_resolve_default_board`, the WRITE path).
 
     ``lanes`` is one entry per board column (``key`` / ``label`` / ``status`` +
     ``count`` of ACTIVE — non-archived — to-dos in that status, plus the column's
@@ -1570,13 +1624,16 @@ async def get_board_summary(
     self-check. Every count is a single ``GROUP BY`` / filtered aggregate — no N+1,
     no per-lane loop of round-trips.
     """
-    board_row = await _board_by_ref(conn, ctx, board_id) if board_id is not None else None
-    if board_row is None:
-        board_row = await _one(conn, select(board).where(board.c.is_default.is_(True)))
+    if board_id is not None:
+        board_row = await _board_by_ref(conn, ctx, board_id)
+    else:
+        board_row = await _implicit_board(conn)
         if board_row is None:
-            # A read must be side-effect free: with no default board we 404 rather
-            # than auto-create one (that is the WRITE path, _resolve_default_board).
-            raise BoardNotFoundError("default")
+            if await _one(conn, select(board.c.id).limit(1)) is not None:
+                raise BoardNotFoundError("default")
+            _log_access(ctx, action="summary")
+            zero = {"overdue": 0, "stalled": 0, "blocked": 0}
+            return None, [], {"active": 0, **zero}, zero
     resolved_board_id = board_row["id"]
     now = _now()
     stalled_before = now - timedelta(days=_STALLED_AFTER_DAYS)
@@ -1668,12 +1725,15 @@ async def create_board(
     key: str | None = None,
     limits: Limits | None = None,
 ) -> Board:
-    """Create a (non-default) board; ``columns`` defaults to the four canonical lanes.
+    """Create a board; ``columns`` defaults to the four canonical lanes.
 
-    Minted ``bd_<ulid>``; ``is_default`` is always ``False`` — the single default
-    board is auto-created on first ``create_todo``, never via this tool, so
-    the ``uq_board_default`` invariant is never at risk here. Omitting ``columns``
-    gives the board the four canonical lanes (:data:`_DEFAULT_COLUMNS`).
+    Minted ``bd_<ulid>``. In a workspace with no default board the new board becomes the
+    default, so a later ``create_todo`` with no ``board_id`` lands on it rather than making a
+    second board. The exception is a workspace whose one existing board is not marked default:
+    that board is already the implicit one, so it is marked instead and keeps the person's
+    to-dos where they were (:func:`_settle_default`). Deciding runs under the default-board
+    lock, so ``uq_board_default`` is never at risk. Omitting ``columns`` gives the board the
+    four canonical lanes (:data:`_DEFAULT_COLUMNS`).
 
     ``key`` is fixed here for the board's life. Given, it must follow the key rule and be
     free in the workspace; omitted, it is derived from ``name``
@@ -1692,6 +1752,7 @@ async def create_board(
         raise ValueError(f"key {DEFAULT_BOARD_KEY} is reserved for the workspace default board")
 
     board_id = new_board_id()
+    is_default = await _settle_default(conn, ctx) is None
     # A derived key that a concurrent create takes first is derived again; an explicit one
     # that is taken is the caller's to change.
     for _attempt in range(3):
@@ -1733,7 +1794,7 @@ async def create_board(
                     name=name,
                     description=_clean(description),
                     columns=columns if columns is not None else _DEFAULT_COLUMNS,
-                    is_default=False,
+                    is_default=is_default,
                     created_at=now,
                     updated_at=now,
                 )

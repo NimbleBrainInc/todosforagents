@@ -72,8 +72,9 @@ a tool.
 ## Keys
 
 Every board has a short key, and every to-do a key made of its board's key and its number
-on that board: `MAG-3` is the third to-do on board `MAG`. The default board's key is `TODO`.
-Any argument that takes a to-do id takes its key, and any argument that takes a board id
+on that board: `MAG-3` is the third to-do on board `MAG`. A to-do that names no board goes on
+the workspace's default board: the first board created, or one made with the key `TODO` if
+there is none. Any argument that takes a to-do id takes its key, and any argument that takes a board id
 takes the board's key, so an agent can pass on "MAG-3" exactly as a person said it.
 
 ## The board UI

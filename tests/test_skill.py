@@ -33,6 +33,10 @@ def test_skill_resource_serves_the_bundled_guidance():
     for verb in ("start_todo", "complete_todo", "block_todo", "reopen_todo", "cancel_todo"):
         assert verb in body
     assert "plan_todos" in body
+    # First use: a short plan on one board, areas as labels, keys told to the person.
+    first_use = body.split("## First use", 1)[1].split("\n## ", 1)[0]
+    for guidance in ("plan_todos", "labels", "keys"):
+        assert guidance in first_use
 
 
 def test_server_instructions_point_at_the_skill():

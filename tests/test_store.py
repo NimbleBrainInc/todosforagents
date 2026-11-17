@@ -599,16 +599,89 @@ async def test_archive_todo_sets_archived_at_without_deleting(app_engine):
 # --------------------------------------------------------------------------- #
 
 
-async def test_create_board_defaults_columns_and_is_not_default(app_engine):
-    """create_board mints a non-default board with the four canonical lanes when
-    columns are omitted."""
+async def test_create_board_defaults_columns(app_engine):
+    """create_board mints a board with the four canonical lanes when columns are omitted."""
     ctx = make_ctx(_tid(), workspace_id="ws_1")
     async with session_for(ctx) as conn:
         b = await store.create_board(conn, ctx, name="Sprint board")
     assert b.id.startswith("bd_")
-    assert b.is_default is False
     assert b.columns is not None
     assert [c["status"] for c in b.columns] == ["open", "in_progress", "blocked", "done"]
+
+
+async def test_the_first_board_made_is_the_default(app_engine):
+    """In a workspace with no default board, create_board's board becomes it; later boards
+    do not, and a to-do that names no board lands on the first one."""
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        first = await store.create_board(conn, ctx, name="Launch")
+        second = await store.create_board(conn, ctx, name="Hiring")
+        landed, _ = await store.create_todo(conn, ctx, title="no board named")
+    assert (first.is_default, second.is_default) == (True, False)
+    assert landed.board_id == first.id
+    assert await _count(ctx, board) == 2
+    assert await _count(ctx, board, board.c.is_default.is_(True)) == 1
+
+
+async def test_a_board_made_after_the_default_board_is_not_the_default(app_engine):
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        made, _ = await store.create_todo(conn, ctx, title="makes the default board")
+        later = await store.create_board(conn, ctx, name="Later")
+    assert later.is_default is False
+    async with session_for(ctx) as conn:
+        again, _ = await store.create_todo(conn, ctx, title="still the default")
+    assert again.board_id == made.board_id
+
+
+async def _unmark_defaults(ctx) -> None:
+    """Leave the workspace with boards but no default, as boards made before the first board
+    became the default were."""
+    async with session_for(ctx) as conn:
+        await conn.execute(board.update().values(is_default=False))
+
+
+async def test_an_only_board_without_a_default_is_the_one_a_write_uses_and_marks(app_engine):
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        only = await store.create_board(conn, ctx, name="Launch")
+    await _unmark_defaults(ctx)
+    async with session_for(ctx) as conn:
+        landed, _ = await store.create_todo(conn, ctx, title="no board named")
+    assert landed.board_id == only.id
+    assert await _count(ctx, board) == 1
+    # Marked, so it stays the default once a second board exists.
+    assert await _count(ctx, board, board.c.is_default.is_(True)) == 1
+    async with session_for(ctx) as conn:
+        await store.create_board(conn, ctx, name="Second")
+        again, _ = await store.create_todo(conn, ctx, title="still there")
+    assert again.board_id == only.id
+
+
+async def test_a_second_board_marks_an_unmarked_only_board_rather_than_itself(app_engine):
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        only = await store.create_board(conn, ctx, name="Launch")
+    await _unmark_defaults(ctx)
+    async with session_for(ctx) as conn:
+        second = await store.create_board(conn, ctx, name="Second")
+        landed, _ = await store.create_todo(conn, ctx, title="no board named")
+    assert second.is_default is False
+    assert landed.board_id == only.id
+
+
+async def test_several_boards_and_no_default_make_the_default_board(app_engine):
+    """With no default and several boards, none is the one meant: a to-do that names no board
+    gets the default board, as on first use."""
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        await store.create_board(conn, ctx, name="Launch")
+        await store.create_board(conn, ctx, name="Hiring")
+    await _unmark_defaults(ctx)
+    async with session_for(ctx) as conn:
+        landed, _ = await store.create_todo(conn, ctx, title="no board named")
+    assert landed.key == "TODO-1"
+    assert await _count(ctx, board) == 3
 
 
 async def test_create_board_accepts_custom_columns(app_engine):
@@ -774,8 +847,9 @@ async def test_list_todos_filters_by_board(app_engine):
     """board_id filter scopes the listing to one board."""
     ctx = make_ctx(_tid(), workspace_id="ws_1")
     async with session_for(ctx) as conn:
-        other_board = await store.create_board(conn, ctx, name="Other")
+        # The to-do first, so it makes the default board and "Other" is a second board.
         on_default, _ = await store.create_todo(conn, ctx, title="Default board todo")
+        other_board = await store.create_board(conn, ctx, name="Other")
         on_other, _ = await store.create_todo(
             conn, ctx, title="Other board todo", board_id=other_board.id
         )
@@ -1015,7 +1089,7 @@ async def test_get_board_summary_lane_counts_and_totals(app_engine):
     async with session_for(ctx) as conn:
         board_obj, lanes, totals, attention = await store.get_board_summary(conn, ctx)
 
-    assert board_obj.is_default is True
+    assert board_obj is not None and board_obj.is_default is True
     lane_counts = {lane["status"]: lane["count"] for lane in lanes}
     assert lane_counts["open"] == 2
     assert lane_counts["in_progress"] == 1
@@ -1122,7 +1196,7 @@ async def test_get_board_summary_explicit_board_id(app_engine):
         board_obj, _lanes, totals, _attention = await store.get_board_summary(
             conn, ctx, board_id=b.id
         )
-    assert board_obj.id == b.id
+    assert board_obj is not None and board_obj.id == b.id
     assert totals["active"] == 1
 
     with pytest.raises(BoardNotFoundError):
@@ -1130,18 +1204,50 @@ async def test_get_board_summary_explicit_board_id(app_engine):
             await store.get_board_summary(conn, ctx, board_id="bd_nope")
 
 
-async def test_get_board_summary_no_default_board_raises_and_creates_nothing(app_engine):
-    """With no board_id and NO default board, get_board_summary raises BoardNotFoundError
-    and does NOT auto-create a board (a read is side-effect free)."""
+async def test_get_board_summary_of_an_empty_workspace_is_empty_and_creates_nothing(app_engine):
+    """With no board_id and no board at all, get_board_summary returns no board, no lanes and
+    zero counts, and does NOT auto-create a board (a read is side-effect free)."""
     ctx = make_ctx(_tid(), workspace_id="ws_1")
     assert await _count(ctx, board) == 0
 
+    async with session_for(ctx) as conn:
+        board_obj, lanes, totals, attention = await store.get_board_summary(conn, ctx)
+    assert (board_obj, lanes) == (None, [])
+    assert totals == {"active": 0, "overdue": 0, "stalled": 0, "blocked": 0}
+    assert attention == {"overdue": 0, "stalled": 0, "blocked": 0}
+    assert await _count(ctx, board) == 0
+
+
+async def test_get_board_summary_reads_an_unmarked_only_board_without_marking_it(app_engine):
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        only = await store.create_board(conn, ctx, name="Launch")
+    await _unmark_defaults(ctx)
+    async with session_for(ctx) as conn:
+        board_obj, *_ = await store.get_board_summary(conn, ctx)
+    assert board_obj is not None and board_obj.id == only.id
+    assert await _count(ctx, board, board.c.is_default.is_(True)) == 0
+
+
+async def test_get_board_summary_with_several_boards_and_no_default_is_not_found(app_engine):
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        await store.create_board(conn, ctx, name="Launch")
+        await store.create_board(conn, ctx, name="Hiring")
+    await _unmark_defaults(ctx)
     with pytest.raises(BoardNotFoundError):
         async with session_for(ctx) as conn:
             await store.get_board_summary(conn, ctx)
+    assert await _count(ctx, board) == 2
 
-    # The read must not have created a default board.
-    assert await _count(ctx, board) == 0
+
+async def test_has_todos_counts_finished_and_archived_to_dos(app_engine):
+    ctx = make_ctx(_tid(), workspace_id="ws_1")
+    async with session_for(ctx) as conn:
+        assert await store.has_todos(conn, ctx) is False
+        made, _ = await store.create_todo(conn, ctx, title="done", status="done")
+        await store.archive_todo(conn, ctx, todo_id=made.id)
+        assert await store.has_todos(conn, ctx) is True
 
 
 # --------------------------------------------------------------------------- #
@@ -1268,8 +1374,8 @@ async def test_query_combines_with_filters(app_engine):
     """A query narrows the other filters: status, board, archived."""
     ctx = make_ctx(_tid(), workspace_id="ws_1")
     async with session_for(ctx) as conn:
-        other = await store.create_board(conn, ctx, name="Other")
         on_default, _ = await store.create_todo(conn, ctx, title="Shared keyword default")
+        other = await store.create_board(conn, ctx, name="Other")
         on_other, _ = await store.create_todo(
             conn, ctx, title="Shared keyword other", board_id=other.id
         )
