@@ -41,6 +41,9 @@ When `limits(scope)` returns `Limits`, the store counts inside the write's own t
 after the change, and refuses with `invalid_request` when the tenant is over: a board past
 `max_boards` (the auto-created default board included), a to-do past `max_total_todos`, or an
 **open** to-do past `max_open_todos`. Each field is optional, and `None` limits nothing.
+A refusal's `next_step` names what to do inside the account: the boards it has (to rename, or
+to separate areas on with labels), or how to free room. The account's limits are the
+deployment's, so the core never points elsewhere.
 
 `max_open_todos` bounds the work in flight. An open to-do is one that is neither `done` nor
 `cancelled` and is not archived, so completing, cancelling or archiving frees room, and any move
@@ -94,6 +97,12 @@ Three tables, defined once in `mcp_todos/db/tables.py`:
 
 - **Ids are opaque and stable.** `bd_` and `td_` followed by a ULID, minted in order, so a
   plan's steps sort as they were given.
+- **One default board per workspace.** A to-do created with no `board_id` lands on it. The
+  first board `create_board` makes becomes it, so a person who starts with a board finds their
+  to-dos there; a workspace with no board gets one made (`TODO`, "To-dos") on its first such
+  to-do. A workspace with one board and none marked default treats that board as the default,
+  and the first write that relies on it marks it. Reads never create or mark a board: with no
+  board yet, `get_board_summary` returns an empty summary.
 - **Keys are for people.** A board's key is 2 to 5 letters or digits, fixed at creation. A
   to-do's key is `<board key>-<number>`, numbered per board and never reused. Every id
   argument accepts the key.

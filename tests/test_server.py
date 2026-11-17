@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from fastmcp.tools import ToolResult
 from nimblebrain_server_sdk import PREVIEW_CHARS
 from tool_errors import error_of
 
@@ -223,7 +224,8 @@ async def test_board_tools(headers):
     """create_board / update_board / list_boards return their documented shapes."""
     created = await server.create_board(name="My board")
     assert created["board"]["name"] == "My board"
-    assert created["board"]["is_default"] is False
+    # The workspace's first board becomes its default.
+    assert created["board"]["is_default"] is True
     board_id = created["board"]["id"]
 
     updated = await server.update_board(board_id=board_id, name="Renamed")
@@ -324,14 +326,49 @@ async def test_get_board_summary_tool(headers):
 
 
 @pytest.mark.asyncio
-async def test_get_board_summary_tool_no_default_is_not_found(headers):
-    """get_board_summary with no default board (and no board_id) returns not_found —
-    a read never auto-creates a board."""
+async def test_get_board_summary_tool_on_an_empty_workspace_onboards(headers):
+    """get_board_summary with no board at all (and no board_id) is an empty summary whose
+    next_step starts the person's list, not an error; a read never creates a board."""
     res = await server.get_board_summary()
-    err = error_of(res)
-    assert err["code"] == "not_found"
-    assert err["entity"] == "board"
-    assert err["next_step"].strip()
+    assert not isinstance(res, ToolResult), res
+    assert res["board"] is None
+    assert res["lanes"] == []
+    assert res["totals"] == {"active": 0, "overdue": 0, "stalled": 0, "blocked": 0}
+    assert res["attention"] == {"overdue": 0, "stalled": 0, "blocked": 0}
+    assert "No to-dos yet" in res["next_step"]
+    assert "plan_todos" in res["next_step"]
+    assert (await server.list_boards())["boards"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_board_summary_tool_names_an_unknown_board_not_found(headers):
+    err = error_of(await server.get_board_summary(board_id="NOPE"))
+    assert (err["code"], err["entity"]) == ("not_found", "board")
+
+
+@pytest.mark.asyncio
+async def test_empty_state_next_steps_onboard(headers):
+    """With no to-dos at all, get_next_todo and list_boards say how to start; once to-dos exist
+    but none is open, get_next_todo says something else."""
+    boards = await server.list_boards()
+    assert boards["boards"] == []
+    assert "No to-dos yet" in boards["next_step"]
+    assert "a board is made for them" in boards["next_step"]
+    nothing = await server.get_next_todo()
+    assert nothing["todo"] is None
+    assert "No to-dos yet" in nothing["next_step"]
+    assert "plan_todos" in nothing["next_step"]
+
+    await server.create_board(name="Launch")
+    on_a_board = await server.get_next_todo()
+    assert "No to-dos yet" in on_a_board["next_step"]
+    assert "a board is made" not in on_a_board["next_step"]
+
+    await server.create_todo(title="finished", status="done")
+    all_done = await server.get_next_todo()
+    assert all_done["todo"] is None
+    assert "No to-dos yet" not in all_done["next_step"]
+    assert "plan_todos" in all_done["next_step"]
 
 
 @pytest.mark.asyncio

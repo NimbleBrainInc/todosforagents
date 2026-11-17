@@ -63,7 +63,7 @@ from mcp_todos.db.store import (
     LimitExceededError,
     TodoNotFoundError,
 )
-from mcp_todos.models import PlanItem, Status, Todo, dump
+from mcp_todos.models import Board, PlanItem, Status, Todo, dump
 from mcp_todos.runtime import AuthError, Overloaded, Runtime, Scope, TodoEvent, select_runtime
 from mcp_todos.ui import load_ui
 
@@ -300,41 +300,89 @@ def _invalid(message: str) -> Any:
     return _error("invalid_request", message, "Correct the argument and retry.")
 
 
-#: Where a refused caller can go when the limit is the deployment's, not the work's.
-_NO_LIMITS_HINT = "Or run Todos for Agents locally (uvx todosforagents), where there are no limits."
+#: How many boards a next_step names before it stops listing them.
+_BOARDS_NAMED = 5
 
 
-def _limit_refused(exc: LimitExceededError) -> Any:
+def _named(boards: list[Board]) -> str:
+    """Boards as a person reads them: ``"Launch plan" (LP)``, comma-separated."""
+    return ", ".join(f'"{b.name}" ({b.key})' for b in boards[:_BOARDS_NAMED])
+
+
+def _use_the_boards(boards: list[Board]) -> str:
+    """Where to put to-dos when no other board can be made: on the board(s) there are,
+    renamed if the name does not fit, with labels to separate areas."""
+    if len(boards) == 1:
+        only = boards[0]
+        return (
+            f'This account\'s board is "{only.name}" ({only.key}). Put the to-dos there '
+            f'(board_id="{only.key}"); if its name does not fit, rename it with '
+            f'update_board(board_id="{only.key}", name=...), and separate areas with labels.'
+        )
+    if boards:
+        return (
+            f"This account's boards are {_named(boards)}. Put the to-dos on one of them by its "
+            "key; rename one with update_board if its name does not fit, and separate areas "
+            "with labels."
+        )
+    return (
+        "Put the to-dos on a board that already exists (list_boards shows them); rename it with "
+        "update_board if its name does not fit, and separate areas with labels."
+    )
+
+
+def _onboard(*, has_board: bool) -> str:
+    """The next_step for a workspace with no to-dos: start the person's list with them."""
+    where = "" if has_board else "; a board is made for them"
+    return (
+        "No to-dos yet. Ask the person what they are working on, then propose 3 to 5 concrete "
+        f"to-dos and create them with plan_todos{where}."
+    )
+
+
+async def _boards_for_refusal(sctx: Scope) -> list[Board]:
+    """The caller's boards, read after a ``max_boards`` refusal so its next_step can name them.
+
+    The refused write's transaction has rolled back, so this opens a fresh session. Best-effort:
+    a failed read leaves the next_step general rather than masking the refusal.
+    """
+    try:
+        async with runtime().session(sctx) as conn:
+            return await store.list_boards(conn, sctx)
+    except Exception:  # noqa: BLE001 - the refusal is what the caller needs; never mask it
+        logger.warning("todos_refusal_boards_failed")
+        return []
+
+
+def _limit_refused(exc: LimitExceededError, boards: list[Board]) -> Any:
     """The ``invalid_request`` tool error for a write that would exceed the runtime's limits.
 
     ``limit`` names the :class:`~mcp_todos.runtime.Limits` field that refused it, so a client
-    can tell this refusal from a bad argument without a new error code.
+    can tell this refusal from a bad argument without a new error code. The limits are the
+    deployment's, which the person chose, so each next_step names what to do inside it:
+    ``boards`` (for ``max_boards``) are the boards the to-dos can go on instead.
     """
     if exc.limit == "max_boards":
         runtime().record(TodoEvent.BOARD_LIMIT_REFUSED)
-        next_step = (
-            "Add the to-dos to a board that already exists (list_boards shows them). "
-            f"{_NO_LIMITS_HINT}"
-        )
+        next_step = _use_the_boards(boards)
     elif exc.limit == "max_total_todos":
         runtime().record(TodoEvent.TOTAL_TODO_LIMIT_REFUSED)
         next_step = (
-            "This account has reached its lifetime allowance of to-dos, and finishing or "
-            "archiving to-dos does not free room. Run Todos for Agents locally (uvx "
-            "todosforagents), where there are no limits, or export the to-dos you have "
-            "(list_todos and get_todo read every one)."
+            "This account has used its lifetime allowance of to-dos; finishing or archiving "
+            "to-dos does not free room. Every to-do it holds stays readable with list_todos "
+            "and get_todo."
         )
     elif exc.limit == "max_details_bytes":
         runtime().record(TodoEvent.DETAILS_LIMIT_REFUSED)
         next_step = (
             "Shorten the details to fit the limit, then retry; keep long material elsewhere and "
-            f"link to it. {_NO_LIMITS_HINT}"
+            "link to it."
         )
     else:
         runtime().record(TodoEvent.OPEN_TODO_LIMIT_REFUSED)
         next_step = (
             "Complete, cancel or archive to-dos that are finished or no longer needed to free "
-            f"room, then retry. {_NO_LIMITS_HINT}"
+            "room, then retry."
         )
     return _error("invalid_request", str(exc), next_step, limit=exc.limit)
 
@@ -422,7 +470,8 @@ async def _handle_tool_error(sctx: Scope, *, entity: str, action: str, exc: Exce
     """
     if isinstance(exc, LimitExceededError):
         await _audit_attempt(sctx, entity=entity, action=action, outcome="denied")
-        return _limit_refused(exc)
+        boards = await _boards_for_refusal(sctx) if exc.limit == "max_boards" else []
+        return _limit_refused(exc, boards)
     if isinstance(exc, TodoNotFoundError):
         await _audit_attempt(sctx, entity="todo", action=action, outcome="denied", todo_id=str(exc))
         return _not_found("todo", str(exc))
@@ -1132,6 +1181,8 @@ async def get_next_todo(board_id: str | None = None, ctx: Context | None = None)
     try:
         async with runtime().session(sctx) as conn:
             todo_obj = await store.get_next_todo(conn, sctx, board_id=board_id)
+            empty = todo_obj is None and not await store.has_todos(conn, sctx)
+            has_board = bool(await store.list_boards(conn, sctx)) if empty else True
     except (BoardNotFoundError, ValueError, TypeError) as exc:
         return await _handle_tool_error(sctx, entity="todo", action="next", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
@@ -1139,7 +1190,12 @@ async def get_next_todo(board_id: str | None = None, ctx: Context | None = None)
     if todo_obj is None:
         return {
             "todo": None,
-            "next_step": "No actionable to-do. Lay out work with plan_todos([...]).",
+            "next_step": (
+                _onboard(has_board=has_board)
+                if empty
+                else "No open to-do to pick up. Review what is in progress or blocked with "
+                "get_board_summary(), or lay out more work with plan_todos."
+            ),
         }
     return {
         "todo": dump(todo_obj),
@@ -1180,6 +1236,15 @@ async def get_board_summary(board_id: str | None = None, ctx: Context | None = N
         return await _handle_tool_error(sctx, entity="board", action="summary", exc=exc)
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="get_board_summary")
+    if board_obj is None:
+        # No board yet: an empty summary, not an error, and nothing is created by reading.
+        return {
+            "board": None,
+            "lanes": lanes,
+            "totals": totals,
+            "attention": attention,
+            "next_step": _onboard(has_board=False),
+        }
     return {
         "board": dump(board_obj),
         "lanes": lanes,
@@ -1216,10 +1281,18 @@ async def list_boards(ctx: Context | None = None) -> dict:
         return _invalid(str(exc))
     except Exception as exc:  # noqa: BLE001 - final safety net; never a raw 500
         return _internal_error(exc, where="list_boards")
-    return {
-        "boards": [dump(b) for b in boards],
-        "next_step": "Open a board with get_board_summary(board_id=...), or create one with create_board(...).",
-    }
+    limits = runtime().limits(sctx)
+    if not boards:
+        next_step = _onboard(has_board=False)
+    elif limits is not None and limits.max_boards is not None and len(boards) >= limits.max_boards:
+        # The account cannot make another board, so the agent is pointed at the ones it has.
+        next_step = _use_the_boards(boards)
+    else:
+        next_step = (
+            "Open a board with get_board_summary(board_id=...), or create one with "
+            "create_board(...)."
+        )
+    return {"boards": [dump(b) for b in boards], "next_step": next_step}
 
 
 @mcp.tool(annotations=ADD, meta=CHATGPT_TOOL_META)
