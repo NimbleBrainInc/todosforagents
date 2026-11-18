@@ -29,7 +29,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.44,<2.1",
     # Annotations, announcements, listing rows, ids, skills and the error contract: the SDK
     # core only, no extras. Pinned exactly: tests/golden/surface.json gates every bump.
-    "nimblebrain-server-sdk==0.4.1",
+    "nimblebrain-server-sdk==0.8.0",
     # Keyset paging. Pinned exactly: tests/test_paging_golden.py holds the cursors agents
     # already hold, so an upgrade is a deliberate, reviewed change.
     "pgkeyset==0.2.0",

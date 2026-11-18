@@ -790,7 +790,7 @@ wheels = [
 
 [[package]]
 name = "nimblebrain-server-sdk"
-version = "0.4.1"
+version = "0.8.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastmcp" },
@@ -798,9 +798,9 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ed/8e/a3717b283335ca06cbf19f4a4f09172d2dd1a73968e28a27266ce630dc20/nimblebrain_server_sdk-0.4.1.tar.gz", hash = "sha256:506ab33bf36154365b03fd739d8d557cca00025545b5e1001433d4d44d7e5869", size = 142903, upload-time = "2026-11-13T07:54:31.018Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b9/93/f16f26e54e00a8ec8c6a7f8ff454aec32b51d714ba290f236f647a4acb69/nimblebrain_server_sdk-0.8.0.tar.gz", hash = "sha256:3642906d42e7a40e9ec4993d726c15349036d07005c04f2c7c32fde30e6f7671", size = 218405, upload-time = "2026-11-18T20:49:29.92Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ae/3e/8b97e3807bc2660f554207bee583b813594ee96690ce76a61f716a791808/nimblebrain_server_sdk-0.4.1-py3-none-any.whl", hash = "sha256:4e756af060f3aaa77196281e8adcc6c1e8ace15ab5714833ae4a4beee8e995fd", size = 80217, upload-time = "2026-11-13T07:54:29.471Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/40/5f03ec7bd91f603de84de680d0da26e0730a4e8a0374937c49793050544b/nimblebrain_server_sdk-0.8.0-py3-none-any.whl", hash = "sha256:60b4dc70491b4771366219c8f1e2054f7880c155060c51949200641a149009cb", size = 116586, upload-time = "2026-11-18T20:49:28.218Z" },
 ]
 
 [[package]]
@@ -1400,7 +1400,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "fastmcp", specifier = ">=4,<5" },
     { name = "mcp", specifier = ">=2,<3" },
-    { name = "nimblebrain-server-sdk", specifier = "==0.4.1" },
+    { name = "nimblebrain-server-sdk", specifier = "==0.8.0" },
     { name = "pgkeyset", specifier = "==0.2.0" },
     { name = "pydantic", specifier = ">=2.12" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.44,<2.1" },

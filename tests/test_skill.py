@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 import yaml
-from nimblebrain_server_sdk.testing import served_skills
+from nimblebrain_server_sdk.testing import Mode, served_skills
 
 from mcp_todos.server import SKILL_CONTENT, mcp
 
@@ -60,7 +60,7 @@ def test_skill_frontmatter_parses_with_name_and_description():
 
 
 @pytest.mark.parametrize("mode", ["auto", "legacy"])
-async def test_the_skills_extension_publishes_the_skill(mode: str):
+async def test_the_skills_extension_publishes_the_skill(mode: Mode):
     """skills/list names exactly this server's skill, and every listed file reads back through
     resources/read with the listed digest; skills/get answers with the same entry. On
     2026-07-28 the server declares io.modelcontextprotocol/skills (`served_skills` checks it).
