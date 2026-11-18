@@ -1,6 +1,6 @@
 [project]
 name = "todosforagents"
-version = "0.5.0"
+version = "0.6.0"
 description = "To-do boards for AI agents, as an MCP server with a board UI. Runs locally on one SQLite file."
 readme = "README.md"
 license = "MIT"
