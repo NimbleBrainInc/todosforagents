@@ -51,6 +51,7 @@ from nimblebrain_server_sdk import (
     PREVIEW_CHARS,
     READS,
     SkillDefinition,
+    add_server_card,
     add_skills,
     announce_resource_list_changed,
     listing_row,
@@ -144,8 +145,16 @@ _ICON = mcp_types.Icon(
     sizes=["128x128"],
 )
 
+#: The server's name, in the reverse-DNS form the Server Card and the MCP Registry require.
+SERVER_NAME = "com.todosforagents/todos"
+#: The Server Card's title and description, for a person choosing the server.
+SERVER_TITLE = "Todos for Agents"
+SERVER_DESCRIPTION = (
+    "To-do boards for AI agents: plan the work, track each step, and see what is next."
+)
+
 mcp: FastMCP = FastMCP(
-    "To-dos",
+    SERVER_NAME,
     # SERVICE_VERSION when a deployment sets it, else the installed package's version.
     version=os.environ.get("SERVICE_VERSION") or _package_version(),
     icons=[_ICON],
@@ -535,6 +544,24 @@ def todos_ui_build(build: str) -> str:
     """The To-dos app UI under a build key. Every key serves the current build."""
     del build
     return BOARD_UI_HTML
+
+
+# What a host reads at <mcp-path>/server-card before it connects: the server's name, version and
+# icon, and where the board goes. Served over streamable HTTP only; the placement is the one the
+# NimbleBrain catalog entry declares, so a server added by URL puts the board in the same place.
+SERVER_CARD = add_server_card(
+    mcp,
+    title=SERVER_TITLE,
+    description=SERVER_DESCRIPTION,
+    placements=[
+        {
+            "slot": "sidebar.apps",
+            "resourceUri": BOARD_UI_URI,
+            "route": "@nimblebraininc/todos",
+            "label": "To-dos",
+        }
+    ],
+)
 
 
 # --------------------------------------------------------------------------- #
