@@ -549,6 +549,9 @@ def todos_ui_build(build: str) -> str:
 # What a host reads at <mcp-path>/server-card before it connects: the server's name, version and
 # icon, and where the board goes. Served over streamable HTTP only; the placement is the one the
 # NimbleBrain catalog entry declares, so a server added by URL puts the board in the same place.
+# A route belongs to one connector per workspace: if this server is added both locally and
+# hosted, the NimbleBrain runtime keeps the route for the one registered first and drops the
+# other's placement with a warning.
 SERVER_CARD = add_server_card(
     mcp,
     title=SERVER_TITLE,
