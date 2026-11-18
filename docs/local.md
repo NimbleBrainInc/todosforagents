@@ -65,6 +65,13 @@ it again.
 
 stdio needs no token: a process that can start the server can already read the database.
 
+One route needs no token: `GET /mcp/server-card`, the server's
+[MCP Server Card](https://github.com/modelcontextprotocol/modelcontextprotocol/pull/2127). A
+client reads it before it connects, to name the server (`com.todosforagents/todos`) and place
+its board. It carries only the server's name, title, description, version, icon and the
+board's placement, never a to-do or the token. The loopback and `Origin` checks still apply to
+it.
+
 ## Upgrades
 
 On start, the server brings the file's schema to the version it was built for:

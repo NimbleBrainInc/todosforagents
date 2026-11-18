@@ -122,6 +122,36 @@ def test_http_without_the_right_token_is_401(tmp_path: Path) -> None:
     assert lower[0] == 200
 
 
+def _get(port: int, path: str, **headers: str) -> tuple[int, str, dict[str, str]]:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        conn.request("GET", path, headers=headers)
+        response = conn.getresponse()
+        return response.status, response.read().decode(), dict(response.getheaders())
+    finally:
+        conn.close()
+
+
+def test_the_server_card_needs_no_token(tmp_path: Path) -> None:
+    """A host reads the card before it has the token; only GET on the card path is public."""
+    db = tmp_path / "todos.db"
+    with http_server(db) as port:
+        card = _get(port, "/mcp/server-card", Accept="application/mcp-server-card+json")
+        foreign = _get(port, "/mcp/server-card", Origin="https://example.com")
+        other_path = _get(port, "/mcp/server-card/x")
+        mcp_get = _get(port, "/mcp")
+        mcp_post = _post(port)
+    status, body, headers = card
+    assert status == 200
+    assert json.loads(body)["name"] == "com.todosforagents/todos"
+    assert token(db) not in body
+    # The loopback checks still run first.
+    assert foreign[0] == 403
+    assert other_path[0] == 401
+    assert mcp_get[0] == 401
+    assert mcp_post[0] == 401
+
+
 async def test_a_client_without_the_token_cannot_call_tools(tmp_path: Path) -> None:
     db = tmp_path / "todos.db"
     with http_server(db) as port:
