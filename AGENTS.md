@@ -53,6 +53,12 @@ newest version in that range when it installs, which the lock does not gate.
 changes the Python API. `pgkeyset` is pinned exactly because its cursor format is frozen in
 `paging.txt`, and SQLAlchemy is held below 2.1 because 2.1 changes the search SQL that file holds.
 
+Renovate (`renovate.json`) opens those pull requests for the Python package, the UI and GitHub
+Actions, on the shared preset's weekly schedule and 14-day wait. A bump of the SDK, `pgkeyset`
+or SQLAlchemy waits for approval on the dependency dashboard, and an SDK bump needs the
+`mcpb/pyproject.toml` constraint moved on its branch. Renovate leaves `mcpb/pyproject.toml`
+alone otherwise, and does not refresh the lock files; `renovate.json` says why.
+
 ## Working here
 
 - `make verify` runs everything CI runs: format, lint, ty, the UI build, every Python suite,

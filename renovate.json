@@ -3,8 +3,56 @@
   "extends": [
     "local>NimbleBrainInc/renovate-config"
   ],
-  "description": "GitHub Actions only. The Python and UI dependencies are bumped by hand: the golden tests gate every bump, and the exact pins in pyproject.toml are deliberate.",
+  "description": "Three managers: the Python package (pyproject.toml and uv.lock), the UI (ui/package.json and its lockfile), and GitHub Actions. Every update is a pull request the golden tests gate. Lock-file refreshes stay off (the shared default): npm cannot hold a refresh to the 14-day wait. uv can, with exclude-newer (exempting NimbleBrain's own packages through exclude-newer-package), but only once every other upload-time in uv.lock is at least 14 days old, or turning it on would downgrade those packages. Turning it on also needs a root constraint-dependencies pin on nimblebrain-server-sdk at the locked version, or a refresh moves the SDK away from the bundle's constraint and tests/test_mcpb.py fails.",
   "enabledManagers": [
+    "pep621",
+    "npm",
     "github-actions"
+  ],
+  "packageRules": [
+    {
+      "description": "The bundle's project pins the released todosforagents to the package's own version and constrains the SDK to uv.lock's (tests/test_mcpb.py), so it moves with a release or an SDK bump, never on its own.",
+      "matchFileNames": [
+        "mcpb/pyproject.toml"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "Golden tests hold the wire contracts nimblebrain-server-sdk and pgkeyset produce, and SQLAlchemy is held below 2.1 because 2.1 changes the search SQL paging.txt freezes. pgkeyset is pinned exactly; the SDK is held to a minor range and uv.lock picks its version, which the bundle's constraint in mcpb/pyproject.toml must equal, so an SDK bump edits that file in the same pull request. A bump of any of them is a deliberate, reviewed change, never part of a group.",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchPackageNames": [
+        "nimblebrain-server-sdk",
+        "pgkeyset",
+        "sqlalchemy"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "python dependencies",
+      "matchPackageNames": [
+        "!nimblebrain-server-sdk",
+        "!pgkeyset",
+        "!sqlalchemy"
+      ]
+    },
+    {
+      "matchManagers": [
+        "npm"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "ui dependencies"
+    }
   ]
 }
