@@ -1,8 +1,8 @@
 """The Server Card a host reads before it connects, at ``<mcp-path>/server-card``.
 
 The card is built from the server itself (``FastMCP(...)`` and ``add_server_card(...)``), so it
-names the server as ``serverInfo`` does, with the package's version, and places the board UI
-the server lists.
+names and titles the server as ``serverInfo`` does, with the package's version, and places the
+board UI the server lists.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ async def test_the_card_names_the_server_as_server_info_does() -> None:
     async with Client(server.mcp) as client:
         info = client.server_info
     assert info is not None
-    assert (card["name"], card["version"]) == (info.name, info.version)
+    assert (card["name"], card["version"], card["title"]) == (info.name, info.version, info.title)
     assert card["name"] == "com.todosforagents/todos"
     # Without version=, FastMCP would report its own version as the server's.
     assert card["version"] == version(server.DISTRIBUTION)

@@ -4,10 +4,14 @@
 # package's version (tests/test_mcpb.py).
 [project]
 name = "todosforagents-mcpb"
-version = "0.6.0"
+version = "0.6.1"
 description = "The Todos for Agents MCP bundle: runs the todosforagents package with uv."
 requires-python = ">=3.13,<3.15"
-dependencies = ["todosforagents==0.6.0"]
+dependencies = ["todosforagents==0.6.1"]
 
 [tool.uv]
 package = false
+# The SDK version the root uv.lock was reviewed with. The package declares a range, so without
+# this the release-time lock would take the newest 0.8.x on PyPI, which no golden test ran. It
+# must equal uv.lock's nimblebrain-server-sdk version (tests/test_mcpb.py).
+constraint-dependencies = ["nimblebrain-server-sdk==0.8.1"]

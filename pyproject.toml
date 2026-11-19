@@ -1,6 +1,6 @@
 [project]
 name = "todosforagents"
-version = "0.6.0"
+version = "0.6.1"
 description = "To-do boards for AI agents, as an MCP server with a board UI. Runs locally on one SQLite file."
 readme = "README.md"
 license = "MIT"
@@ -28,8 +28,10 @@ dependencies = [
     # search predicate tests/golden/paging.txt freezes. Moving to 2.1 is a reviewed change.
     "sqlalchemy[asyncio]>=2.0.44,<2.1",
     # Annotations, announcements, listing rows, ids, skills and the error contract: the SDK
-    # core only, no extras. Pinned exactly: tests/golden/surface.json gates every bump.
-    "nimblebrain-server-sdk==0.8.0",
+    # core only, no extras. Held to one minor: in 0.x a minor may break and a patch never changes
+    # the Python API. uv.lock picks the version CI, the goldens and the released bundle run, so a
+    # bump there is reviewed. A PyPI or uvx install takes the newest 0.8.x when it installs.
+    "nimblebrain-server-sdk>=0.8.1,<0.9",
     # Keyset paging. Pinned exactly: tests/test_paging_golden.py holds the cursors agents
     # already hold, so an upgrade is a deliberate, reviewed change.
     "pgkeyset==0.2.0",
