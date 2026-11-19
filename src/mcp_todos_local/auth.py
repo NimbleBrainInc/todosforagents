@@ -13,6 +13,10 @@ read:
 
 ``todosforagents --print-token`` prints it for an installer. stdio needs no token: a process
 that can start the server already has the database.
+
+One route is public: ``GET`` on the Server Card (``<mcp-path>/server-card``). It holds only the
+server's name, version, description, icon and placements, and a host reads it before it has
+any credential, so it is served without the token (the loopback checks still apply).
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ import hmac
 import logging
 import os
 import secrets
+from collections.abc import Collection
 from pathlib import Path
 
 from starlette.responses import PlainTextResponse
@@ -78,14 +83,22 @@ def _presented(scope: Scope) -> bytes | None:
 class BearerGuard:
     """ASGI middleware that refuses, with 401, an HTTP or WebSocket request without the token.
 
-    The comparison is constant-time, and the refusal says nothing about the token.
+    The comparison is constant-time, and the refusal says nothing about the token. A ``GET`` on
+    one of ``public_paths`` (exact paths) needs no token.
     """
 
-    def __init__(self, app: ASGIApp, token: str) -> None:
+    def __init__(self, app: ASGIApp, token: str, public_paths: Collection[str] = ()) -> None:
         self.app = app
         self._token = token.encode("ascii")
+        self._public_paths = frozenset(public_paths)
 
     def authorized(self, scope: Scope) -> bool:
+        if (
+            scope["type"] == "http"
+            and scope.get("method") == "GET"
+            and scope.get("path") in self._public_paths
+        ):
+            return True
         presented = _presented(scope)
         return presented is not None and hmac.compare_digest(presented, self._token)
 

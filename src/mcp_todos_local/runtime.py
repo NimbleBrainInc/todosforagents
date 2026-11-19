@@ -10,7 +10,8 @@
 | attach     | nothing beyond the core's tools, skill and UI                        |
 | lifespan   | the schema upgraded (:mod:`mcp_todos_local.schema`) before serving   |
 | wrap_http  | loopback-only clients, ``Host`` and ``Origin`` (:mod:`.http`), then  |
-|            | the per-install bearer token (:mod:`.auth`)                          |
+|            | the per-install bearer token (:mod:`.auth`); the Server Card needs   |
+|            | no token                                                             |
 
 The store is safe here only because there is exactly one principal: no query carries a
 tenant predicate, and SQLite has no row-level security. A runtime with more than one
@@ -104,8 +105,21 @@ class LocalRuntime:
 
     def wrap_http(self, app: ASGIApp) -> ASGIApp:
         # The loopback checks run first, so a foreign page or host is refused (403) before
-        # its token is considered; the token then keeps out other local processes (401).
+        # its token is considered; the token then keeps out other local processes (401). The
+        # Server Card is read before a client has the token, so it needs none.
         path = auth.token_path(self.db_path)
-        guarded = auth.BearerGuard(app, auth.load_or_create(path))
+        guarded = auth.BearerGuard(
+            app, auth.load_or_create(path), public_paths=_server_card_paths(app)
+        )
         logger.info("local HTTP requires the bearer token stored in %s", path)
         return LoopbackGuard(guarded)
+
+
+def _server_card_paths(app: ASGIApp) -> tuple[str, ...]:
+    """Where ``app`` serves the Server Card: under its streamable-HTTP path, which FastMCP's
+    ``http_app()`` records on the app's state. None when the app records no such path."""
+    state = getattr(app, "state", None)
+    path = getattr(state, "path", None)
+    if getattr(state, "transport_type", None) != "streamable-http" or not path:
+        return ()
+    return (f"{str(path).rstrip('/')}/server-card",)
