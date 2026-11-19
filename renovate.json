@@ -3,7 +3,7 @@
   "extends": [
     "local>NimbleBrainInc/renovate-config"
   ],
-  "description": "Three managers: the Python package (pyproject.toml and uv.lock), the UI (ui/package.json and its lockfile), and GitHub Actions. Every update is a pull request the golden tests gate. Lock-file refreshes stay off (the shared default): npm cannot hold a refresh to the 14-day wait, and uv can (exclude-newer) only once uv.lock holds nothing newer than 14 days, or turning it on would downgrade those packages. On 2026-11-18 fifteen locked releases were newer than that, the latest cyclopts 5.5.0 (uploaded 2026-11-14), so a lock taken unchanged ages past the wait on 2026-11-28.",
+  "description": "Three managers: the Python package (pyproject.toml and uv.lock), the UI (ui/package.json and its lockfile), and GitHub Actions. Every update is a pull request the golden tests gate. Lock-file refreshes stay off (the shared default): npm cannot hold a refresh to the 14-day wait. uv can, with exclude-newer (exempting NimbleBrain's own packages through exclude-newer-package), but only once every other upload-time in uv.lock is at least 14 days old, or turning it on would downgrade those packages. Turning it on also needs a root constraint-dependencies pin on nimblebrain-server-sdk at the locked version, or a refresh moves the SDK away from the bundle's constraint and tests/test_mcpb.py fails.",
   "enabledManagers": [
     "pep621",
     "npm",
