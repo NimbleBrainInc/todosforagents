@@ -13,7 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
-BUNDLE = tomllib.loads((ROOT / "mcpb" / "pyproject.toml").read_text())["project"]
+BUNDLE_PROJECT = tomllib.loads((ROOT / "mcpb" / "pyproject.toml").read_text())
+BUNDLE = BUNDLE_PROJECT["project"]
+LOCK = tomllib.loads((ROOT / "uv.lock").read_text())
 MANIFEST = json.loads((ROOT / "mcpb" / "manifest.json").read_text())
 
 
@@ -49,3 +51,9 @@ def test_the_bundle_runs_the_local_runtime_with_uv_from_its_lock() -> None:
 def test_the_bundle_python_range_matches_its_project() -> None:
     assert MANIFEST["compatibility"]["runtimes"]["python"] == BUNDLE["requires-python"]
     assert PACKAGE["requires-python"] == ">=3.13"
+
+
+def test_the_bundle_holds_the_sdk_to_the_reviewed_lock() -> None:
+    sdk = "nimblebrain-server-sdk"
+    (locked,) = [p["version"] for p in LOCK["package"] if p["name"] == sdk]
+    assert BUNDLE_PROJECT["tool"]["uv"]["constraint-dependencies"] == [f"{sdk}=={locked}"]

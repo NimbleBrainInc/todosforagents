@@ -11,3 +11,7 @@ dependencies = ["todosforagents==0.6.1"]
 
 [tool.uv]
 package = false
+# The SDK version the root uv.lock was reviewed with. The package declares a range, so without
+# this the release-time lock would take the newest 0.8.x on PyPI, which no golden test ran. It
+# must equal uv.lock's nimblebrain-server-sdk version (tests/test_mcpb.py).
+constraint-dependencies = ["nimblebrain-server-sdk==0.8.1"]
