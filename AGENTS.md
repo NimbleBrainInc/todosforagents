@@ -43,8 +43,12 @@ diff and commit message for these before pushing.
 | `paging.txt` | The cursors agents already hold, and the SQL each resumes with |
 
 A deliberate change edits the golden file by hand in the same pull request, so review sees the
-diff. A dependency bump that changes one is a reviewed change too: that is why
-`nimblebrain-server-sdk` and `pgkeyset` are pinned exactly and SQLAlchemy is held below 2.1.
+diff. A dependency bump that changes one is a reviewed change too. `uv.lock` is what CI, the
+golden tests and the bundle (`uv run --frozen`) run, and only a pull request changes it, so the
+lock is the gate for every bump; `pyproject.toml` declares the range the package works with.
+`nimblebrain-server-sdk` is held to one minor (`<0.9`): in 0.x a minor may break and a patch never
+changes the Python API. `pgkeyset` is pinned exactly because its cursor format is frozen in
+`paging.txt`, and SQLAlchemy is held below 2.1 because 2.1 changes the search SQL that file holds.
 
 ## Working here
 
