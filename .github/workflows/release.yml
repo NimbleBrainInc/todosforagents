@@ -7,7 +7,7 @@ name: Release
 #    it (uvx, stdio). Then the files are published with trusted publishing (OIDC): no API token
 #    exists anywhere. PyPI trusts this repository, this file (release.yml) and the `pypi`
 #    environment by name, and the environment waits for a maintainer's approval.
-# 2. mpak, as the MCP bundle @nimblebraininc/todosforagents, only after PyPI has the version.
+# 2. A GitHub release carrying the MCP bundle, only after PyPI has the version.
 #    The bundle is uv type: it carries no code, only mcpb/pyproject.toml pinning this version,
 #    a uv.lock made here against PyPI, the manifest and the icon. The host runs it with
 #    `uv run --frozen`, so a user gets exactly the locked set.
@@ -123,17 +123,15 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 
-  # The MCP bundle, registered with mpak through mcpb-pack, which validates the manifest, packs
-  # the directory with the mcpb CLI (a uv bundle vendors nothing), and announces it with this
-  # job's OIDC token. mcpb-pack uploads to a GitHub release only on a release event, and the
-  # registry reads the bundle from the release, so this job makes the release and uploads it.
+  # The MCP bundle for desktop hosts. mcpb-pack validates the manifest and packs the directory
+  # with the mcpb CLI (a uv bundle vendors nothing). mcpb-pack uploads to a GitHub release only on
+  # a release event, so this job makes the release and uploads the bundle and its lock to it.
   mcpb:
     needs: pypi
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: write # create the GitHub release and upload the bundle to it
-      id-token: write # the OIDC token mpak verifies
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -177,14 +175,3 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
             --notes "todosforagents ${TAG#v}: https://pypi.org/project/todosforagents/${TAG#v}/" \
             "$BUNDLE" mcpb/uv.lock
-      - name: Register the bundle with mpak
-        uses: NimbleBrainInc/mcpb-pack@e74c82722fa4b954ce7740f875d6c437ae471df6 # v3.0.0
-        with:
-          directory: mcpb
-          bundle-path: ${{ steps.pack.outputs.bundle-path }}
-          build: false
-          upload: false
-          announce: true
-          announce-required: true
-          platform-os: any
-          platform-arch: any
