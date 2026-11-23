@@ -20,8 +20,9 @@ That serves MCP over stdio. To add it to Claude Code:
 claude mcp add todosforagents -- uvx todosforagents
 ```
 
-For Claude Desktop, the MCP bundle `@nimblebraininc/todosforagents` is available from
-[mpak](https://www.mpak.dev). It runs the same package and asks where to keep the database.
+For Claude Desktop, download `todosforagents-<version>.mcpb` from the
+[latest release](https://github.com/NimbleBrainInc/todosforagents/releases/latest). It runs the
+same package and asks where to keep the database.
 
 Any other MCP client that starts a stdio server can run `uvx todosforagents` the same way.
 To serve HTTP on `127.0.0.1` instead, run `uvx todosforagents --http`; HTTP requires a
