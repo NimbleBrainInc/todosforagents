@@ -123,9 +123,9 @@ jobs:
           path: dist/
       - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
 
-  # The MCP bundle for desktop hosts. mcpb-pack validates the manifest and packs the directory
-  # with the mcpb CLI (a uv bundle vendors nothing). mcpb-pack uploads to a GitHub release only on
-  # a release event, so this job makes the release and uploads the bundle and its lock to it.
+  # The MCP bundle for desktop hosts. The mcpb CLI validates the manifest and packs the directory
+  # (a uv bundle vendors nothing); this job then makes the GitHub release and uploads the bundle
+  # and its lock to it.
   mcpb:
     needs: pypi
     runs-on: ubuntu-latest
@@ -158,20 +158,18 @@ jobs:
           uv run python scripts/smoke.py --runtime-env \
             uv run --directory mcpb --frozen --no-dev python -m mcp_todos
           rm -rf mcpb/.venv
-      - name: Pack the bundle
-        id: pack
-        uses: NimbleBrainInc/mcpb-pack@e74c82722fa4b954ce7740f875d6c437ae471df6 # v3.0.0
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
-          directory: mcpb
-          output: "todosforagents-{version}.mcpb"
-          upload: false
-          announce: false
+          node-version: "22"
+      - name: Pack the bundle
+        env:
+          TAG: ${{ github.ref_name }}
+        run: npx -y @anthropic-ai/mcpb@2.1.2 pack mcpb "mcpb/todosforagents-${TAG#v}.mcpb"
       - name: Create the GitHub release with the bundle and its lock
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
-          BUNDLE: mcpb/${{ steps.pack.outputs.bundle-path }}
         run: |
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$TAG" \
             --notes "todosforagents ${TAG#v}: https://pypi.org/project/todosforagents/${TAG#v}/" \
-            "$BUNDLE" mcpb/uv.lock
+            "mcpb/todosforagents-${TAG#v}.mcpb" mcpb/uv.lock
